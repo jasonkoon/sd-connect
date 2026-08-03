@@ -11,14 +11,101 @@ See [PLAN.md](./PLAN.md) for the full design and build order.
 
 ## Requirements
 
-- macOS with a Stream Deck MK.2 attached
-- [Node](https://nodejs.org) 22.6+ (runs the TypeScript directly, no build step)
-- The Elgato Stream Deck app **not** running (it claims the USB HID device)
+- macOS with a Stream Deck MK.2
+- [Node](https://nodejs.org) **23.6+**, installed via Homebrew (see step 1)
+- The Elgato Stream Deck app **not** running — it claims the USB device exclusively
+
+Node 23.6 is a hard floor: the scripts run `.ts` files directly and rely on
+unflagged type stripping. Node 22.x fails with
+`ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"`.
 
 ## Setup
 
+Run these once per machine. Takes a couple of minutes.
+
+### 1. Install Node via Homebrew
+
 ```sh
+brew install node
+```
+
+Use Homebrew even if you already have node from nvm, fnm or similar. launchd
+needs an absolute path to the binary, and version managers upgrade and prune
+their installs — which breaks startup at login later, with no obvious cause.
+The installer looks for `/opt/homebrew/bin/node`, then `/usr/local/bin/node`.
+
+### 2. Install dependencies
+
+```sh
+cd sd-connect
 npm install
+```
+
+### 3. Check it works before installing the daemon
+
+```sh
+npm run watch -- --once   # prints your agents as text, no deck needed
+npm run smoke             # lights up the deck, then blanks it
+```
+
+`watch` failing means herdr cannot be reached. `smoke` exit codes: `2` means no
+deck was found, `3` means something else already has it open — usually the
+launch agent from a previous install, or the Elgato app.
+
+Only one process can hold the deck at a time, so stop the agent before running
+`smoke`, `preview` or `npm start` by hand:
+
+```sh
+./scripts/uninstall-launchd.sh
+```
+
+### 4. Install the launch agent
+
+```sh
+./scripts/install-launchd.sh
+```
+
+This starts it now and at every login. It preflights node and the native
+modules, so a broken setup fails here with an explanation rather than silently
+at next login.
+
+### 5. Approve the Accessibility prompt
+
+Press any key on the deck. macOS will ask for Accessibility permission, because
+jumping to an agent raises the terminal window via AppleScript. Approve it.
+
+Until you do, presses still focus the pane inside herdr but the window will not
+come forward, and the log shows:
+
+```
+osascript is not allowed assistive access. (-1719)
+```
+
+If you miss the prompt, grant it under
+**System Settings → Privacy & Security → Accessibility**.
+
+### 6. Optional: pin agents to fixed keys
+
+See [Configuration](#configuration). Without config, agents flow into keys
+automatically and everything still works.
+
+### Check it is running
+
+```sh
+launchctl print gui/$(id -u)/com.jasonkoon.sd-connect | awk '/^\t(state|pid) =/'
+tail -f ~/Library/Logs/sd-connect/sd-connect.log
+```
+
+Expect `state = running` and a pid. The log should end with `running; Ctrl-C to
+stop`, or `no Stream Deck found; waiting for one to be plugged in` if the deck
+is not connected — both are healthy.
+
+### Updating
+
+After changing code, re-run the installer. It is idempotent.
+
+```sh
+./scripts/install-launchd.sh
 ```
 
 ## Previewing the key design
@@ -133,7 +220,8 @@ Expected output:
 [smoke] PASS — shutting down (blank panel, no native close())
 ```
 
-Exit code `2` means no deck was found. Exit `1` means an assertion failed.
+Exit codes: `2` no deck found, `3` the deck is open in another process (stop the
+launch agent), `1` an assertion failed.
 
 ## Running it
 
@@ -143,53 +231,32 @@ npm start -- --once      # paint one frame and exit
 npm start -- --verbose   # also log every repaint
 ```
 
-## Start at login
+## The launch agent
 
 ```sh
-./scripts/install-launchd.sh     # install and start the launch agent
+./scripts/install-launchd.sh     # install, or reinstall after a code change
 ./scripts/uninstall-launchd.sh   # remove it
 tail -f ~/Library/Logs/sd-connect/sd-connect.log
 ```
 
-The installer is safe to re-run; use it to pick up code changes. It preflights
-the node binary and the native modules, so a broken setup fails there with an
-explanation rather than silently at next login.
+The agent is `com.jasonkoon.sd-connect`: RunAtLoad plus KeepAlive, so it starts
+at login and comes back if it dies. Pass `--node /path/to/node` to override the
+interpreter.
 
-**Node comes from Homebrew on purpose.** launchd needs an absolute path, and a
-version-manager node (nvm, vite-plus, fnm) can be upgraded or pruned out from
-under the agent — which breaks startup at login with no obvious cause. Override
-with `--node /path/to/node` if you want something else.
-
-**Accessibility permission is required for window raising.** The first time the
-agent tries to raise a window, macOS prompts; approve it. A launch agent does not
-inherit the permission your terminal has, so before approving you will see this
-in the log and presses will focus the pane without bringing the window forward:
-
-```
-osascript is not allowed assistive access. (-1719)
-```
+Logs are never rotated, so per-frame repaints are only logged under
+`--verbose`. Key presses and failures are always logged.
 
 ### Using this on more than one machine
 
 The daemon opens whichever Stream Deck is attached when it looks — no serial
 number or USB path is baked in anywhere — so the same checkout works on several
 machines with different physical decks, as long as they are the same model.
+Run the [Setup](#setup) steps once on each.
 
 Nothing machine-specific is committed. The plist is generated at install time
 from `launchd/*.plist.template` with that machine's project and node paths, and
 `~/.config/sd-connect/config.toml` lives outside the repo, so pins can differ
 per machine (home and work rarely have the same repos checked out).
-
-Per machine, once:
-
-```sh
-git clone <repo> && cd sd-connect
-npm install
-brew install node                 # if not already present
-./scripts/install-launchd.sh
-```
-
-Then approve the Accessibility prompt the first time you press a key.
 
 **No deck attached is fine.** The daemon starts, logs `no Stream Deck found;
 waiting for one to be plugged in`, and keeps polling herdr. When a deck appears

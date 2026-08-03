@@ -26,6 +26,21 @@ export class DeckUnavailableError extends Error {
   }
 }
 
+/**
+ * The deck is attached but another process already has it open.
+ *
+ * HID devices are claimed exclusively on macOS, so this happens whenever the
+ * launch agent is running and you also start a foreground command, or if the
+ * Elgato software is installed. Worth distinguishing from "not plugged in",
+ * because the fix is completely different.
+ */
+export class DeckBusyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DeckBusyError'
+  }
+}
+
 export interface DeckOptions {
   /** 0-100. Applied once at open. */
   brightness?: number
@@ -177,7 +192,20 @@ export async function openDeck(options: DeckOptions = {}): Promise<Deck> {
     throw new DeckUnavailableError('no Stream Deck found on USB')
   }
 
-  const device = await openStreamDeck(first.path)
+  let device: StreamDeck
+  try {
+    device = await openStreamDeck(first.path)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // node-hid surfaces exclusive-access conflicts as an opaque IOKit string.
+    if (message.includes('exclusive access') || message.includes('already open')) {
+      throw new DeckBusyError(
+        'the Stream Deck is already open in another process ' +
+          '(the sd-connect launch agent, or the Elgato Stream Deck app)',
+      )
+    }
+    throw error
+  }
 
   // Count buttons from CONTROLS rather than trusting a NUM_KEYS constant:
   // on 7.6.3 under Bun, NUM_KEYS/ICON_SIZE read back as undefined, while

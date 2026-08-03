@@ -5,7 +5,7 @@
  *   bun run smoke
  */
 
-import { Deck, TILE_BYTES, openDeck, ICON_SIZE, DeckUnavailableError } from './deck.ts'
+import { Deck, TILE_BYTES, openDeck, ICON_SIZE, DeckBusyError, DeckUnavailableError } from './deck.ts'
 import { installShutdownHandlers, onShutdown, shutdown } from './shutdown.ts'
 
 /** Flat colour tile, built by hand so this test has no dependency on sharp. */
@@ -51,11 +51,18 @@ async function main(): Promise<void> {
   try {
     deck = await openDeck({ brightness: 70 })
   } catch (err) {
+    if (err instanceof DeckBusyError) {
+      console.error(`[smoke] ${err.message}`)
+      console.error('[smoke] stop it first:  ./scripts/uninstall-launchd.sh')
+      process.exit(3)
+    }
     if (err instanceof DeckUnavailableError) {
       console.error(`[smoke] ${err.message} — plug in the Stream Deck and retry.`)
       process.exit(2)
     }
-    throw err
+    // Anything else is unexpected; show it plainly rather than as a stack trace.
+    console.error(`[smoke] could not open the deck: ${err instanceof Error ? err.message : err}`)
+    process.exit(1)
   }
 
   onShutdown(() => deck.shutdown())
