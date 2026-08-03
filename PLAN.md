@@ -29,13 +29,23 @@ live status of every agent across all herdr sessions.
   `cwd`, `terminal_title`, `pane_id`, `tab_id`, `workspace_id`, `focused`, `agent`.
 - `events.subscribe` takes `{subscriptions:[{type}]}` and replies
   `{"result":{"type":"subscription_started"}}`, then streams `{event, data}` lines.
-- **Gotcha:** `pane.agent_status_changed` requires a concrete `pane_id` — you cannot
-  subscribe to it globally. Subscribing without one errors with
-  `missing field 'pane_id'`.
-- **Therefore:** subscribe to `pane.updated` (carries the whole pane object including
-  `agent_status`) plus `pane.created` / `pane.closed` / `pane.agent_detected`.
-  `pane.updated` is chatty (fires on scroll and output), so the daemon must diff
-  and only re-render when a rendered field actually changed.
+- **Each request connection is single-shot.** After one request/response the
+  server closes it; a second write gets EPIPE. Subscription connections are the
+  exception and stay open. So polling means one short-lived connection per poll.
+- **Status changes are NOT pushed. Phase 1 polls.** This overturns the original
+  design. Measured directly: prompting an idle agent drove
+  `idle -> working -> done`, a poller saw every transition, and a subscription to
+  all 23 no-arg event types emitted nothing for that pane. `pane.updated` fires
+  only on layout-ish changes and its payload can be stale (observed reporting
+  `idle` for a pane that `agent.list` reported as `working`).
+  `pane.agent_status_changed` additionally requires a concrete `pane_id`, so it
+  cannot be used for discovery, and it did not fire either.
+- The event stream is also noisy and useless to us: 14 events/sec at idle,
+  almost entirely `pane_focused` / `workspace_focused` / `tab_focused` /
+  `layout_updated`.
+- `agent.list` costs about 0.84ms including connection setup, so polling every
+  ~400ms across a couple of sessions is negligible.
+
 - Future phases already have what they need: `agent.focus`, `workspace.focus`,
   `agent.prompt`, `agent.send_keys`.
 
@@ -86,9 +96,11 @@ back to HerdrClient, nothing else changes.
 
 - `src/herdr/sessions.ts` — enumerate sessions from `~/.config/herdr/sessions/`,
   verify each socket is live, rescan on an interval and on socket errors.
-- `src/herdr/client.ts` — one connection per session. Connect, `agent.list` for the
-  initial snapshot, `events.subscribe`, parse NDJSON, emit normalized changes,
-  reconnect with backoff on drop.
+- `src/herdr/client.ts` — request/response over the socket. One short-lived
+  connection per request, because the server closes it after replying.
+- `src/herdr/poller.ts` — polls `agent.list` per session on an interval and emits
+  only real changes. Polling rather than subscribing is a measured decision, not
+  a shortcut: see the API findings above.
 - `src/model/store.ts` — merged agent map keyed `${session}:${pane_id}`. Holds only
   render-relevant fields so diffing is cheap and `pane.updated` noise is absorbed.
 - `src/model/repo.ts` — cwd -> git root basename, cached per cwd (bounded).
@@ -153,9 +165,10 @@ Missing config is fine — defaults, no pins, pure auto-flow.
    smoke test asserting the diff suppresses redundant writes.
 3. **Tile renderer** — DONE. Canvas drawing, measured fit, LRU cache, PNG dump +
    contact sheet, on-hardware preview, 14 unit tests.
-4. **herdr client** — session discovery, connect, snapshot, subscribe, normalize,
-   reconnect. Test with a `--dump` mode that prints the merged model as text, no
-   deck involved. This is where most bugs will live, so keep it headless-testable.
+4. **herdr client** — DONE. Session discovery with liveness checks, single-shot
+   request client, polling loop that emits only real changes, `watch` mode.
+   19 tests against a fake herdr server. Verified live: prompting an agent
+   produced `done -> working -> done` on the watch output.
 5. **Store + layout** — merge, diff, pins, ordering, overflow. Pure functions, unit
    tested against fixture snapshots.
 6. **Wire up** — `bun run start`. Verify live: change an agent's state and watch the
@@ -168,8 +181,8 @@ Missing config is fine — defaults, no pins, pure auto-flow.
 | --- | --- |
 | Bun segfault on `close()` | Confirmed; avoid `close()`, use `clearPanel()` + `process.exit(0)`. Fall back to Node 24 if other native crashes appear. |
 | No font rendering in sharp | Hit and resolved in step 2: switched to `@napi-rs/canvas`, which sees system fonts and removes the sharp dependency entirely. |
-| `pane.updated` event storm | Diff on render-relevant fields only; renderer is cached; USB writes only on real change. |
-| No global agent-status subscription | Use `pane.updated` as the carrier, verified to include `agent_status`. |
+| Event stream is noisy (14/s) and does not carry status changes | Do not subscribe at all in phase 1. Poll `agent.list` (0.84ms) and diff. |
+| Polling adds latency to status changes | ~400ms interval, well under human glance latency. Revisit if herdr gains a real status event. |
 | Session starts/stops while running | Periodic rescan of the sessions dir plus reconnect-with-backoff. |
 | Deck unplugged mid-run | Catch write errors, poll for the device, re-open and full-repaint on return. |
 | Two panes, same session, same cwd | Pin matches the first by stable sort; the rest auto-flow. Documented, not an error. |

@@ -32,6 +32,26 @@ bun run preview       # pushes the same samples to the real deck, Ctrl-C to exit
 `dump` is for iterating on layout without hardware; `preview` is the check that
 matters, because a 6x PNG flatters a 72px LCD.
 
+## Watching herdr (no hardware needed)
+
+```sh
+bun run watch          # stream agent status as it changes
+bun run watch --once   # one snapshot, then exit
+```
+
+Example:
+
+```
+[watch] sessions dir: /Users/you/.config/herdr/sessions
+[watch]   canaries: live
+[watch]   zephyr: live
+
+[12:28:01 PM] 6 agent(s)
+   0 * canaries          working canaries/w1:p2
+   1 o zephyr_cloudflow  idle    zephyr/w1:p1
+   2 v portal            done    zephyr/w2:p1
+```
+
 ## Smoke test
 
 Verifies the device opens, renders, diffs redundant writes, and shuts down
@@ -80,6 +100,27 @@ all. If you are tempted to "simplify" this back to SVG, you will get blank keys.
 Also note `device.NUM_KEYS` and `device.ICON_SIZE` read back as `undefined` under
 Bun, so `openDeck()` counts buttons from `device.CONTROLS` instead.
 
+## herdr API notes
+
+**We poll; we do not subscribe.** herdr has an `events.subscribe` method, and
+subscribing to it for agent status looks obvious. It does not work. Measured:
+prompting an idle agent drove a real `idle -> working -> done` transition, a
+poller saw every step, and a subscription to all 23 no-argument event types
+emitted nothing for that pane. `pane.updated` fires only on layout-ish changes,
+and its payload was observed reporting `idle` for a pane that `agent.list`
+reported as `working`. `pane.agent_status_changed` requires a concrete
+`pane_id`, so it is useless for discovery, and it did not fire either.
+
+The stream is also noisy: about 14 events/sec while idle, nearly all
+`pane_focused` / `workspace_focused` / `tab_focused` / `layout_updated`.
+
+`agent.list` costs about 0.84ms including connection setup, so a ~400ms poll is
+cheap and, unlike the event stream, correct.
+
+**Request connections are single-shot.** The server answers one request then
+closes; a second write on the same socket gets EPIPE. Only subscription
+connections stay open.
+
 ## Layout
 
 ```
@@ -88,6 +129,12 @@ src/
   deck.ts           device lifecycle, diffed key writes
   shutdown.ts       signal handling, cleanup with a watchdog
   smoke.ts          step 1 hardware verification
+  herdr/
+    protocol.ts     NDJSON request/response over the Unix socket
+    sessions.ts     discover sessions, prove liveness with a ping
+    poller.ts       poll agent.list, emit only real changes
+    watch.ts        headless view of the merged model
+    herdr.test.ts   protocol, discovery and polling, vs a fake server
   render/
     theme.ts        colours, fonts, bar height
     text.ts         measured fitting: shrink, wrap, then truncate

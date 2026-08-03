@@ -10,6 +10,7 @@
     "smoke": "bun run src/smoke.ts",
     "dump": "bun run src/render/dump.ts",
     "preview": "bun run src/render/preview.ts",
+    "watch": "bun run src/herdr/watch.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
