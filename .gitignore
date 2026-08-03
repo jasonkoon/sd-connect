@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+
+# bun.lock IS committed on purpose: this is an application, not a library, and
+# native deps (node-hid, sharp) are exactly the kind of thing you want pinned.
+bun.lockb
+
+# Scratch output from the tile renderer's PNG dump mode (build step 3)
+/tmp-tiles/
+.DS_Store

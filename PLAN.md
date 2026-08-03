@@ -1,0 +1,174 @@
+# sd-connect — Phase 1 Plan
+
+Drive an Elgato Stream Deck MK.2 directly (no Elgato software) to display the
+live status of every agent across all herdr sessions.
+
+## Verified facts (tested on this machine, not assumed)
+
+**Hardware**
+- Stream Deck MK.2 present on USB, `model: original-mk2`, serial `DL47L2A33731`.
+- 15 buttons, 5x3 grid, each 72x72px, `feedbackType: lcd`.
+- No Elgato software installed or running, so the HID device is free to claim.
+
+**Bun + node-hid**
+- `@elgato-stream-deck/node@7.6.3` installs under Bun 1.3.2 and a prebuilt
+  `HID-darwin-arm64` binary exists, so no compile step is needed.
+- `bun pm trust --all` reports a failure for the jpeg-turbo postinstall, but this
+  is harmless: the deck opens, renders, and sets brightness fine.
+- **`streamDeck.close()` segfaults Bun** (`panic: Segmentation fault at address 0x20`).
+  Everything else works. Workaround: `clearPanel()` then `process.exit(0)`.
+  This is the main platform risk and it has a clean workaround.
+- `fillKeyBuffer` requires exactly `72*72*3` bytes with `{format:'rgb'}`;
+  sharp needs `.removeAlpha().raw()`. Verified rendering 4 tiles to real hardware.
+
+**herdr API**
+- Unix socket per session: `~/.config/herdr/sessions/<name>/herdr.sock`.
+  Sessions and their sockets are listed by `herdr session list`.
+- Newline-delimited JSON. Request: `{id, method, params}`.
+- `agent.list` returns per agent: `agent_status` (`idle|working|blocked|done|unknown`),
+  `cwd`, `terminal_title`, `pane_id`, `tab_id`, `workspace_id`, `focused`, `agent`.
+- `events.subscribe` takes `{subscriptions:[{type}]}` and replies
+  `{"result":{"type":"subscription_started"}}`, then streams `{event, data}` lines.
+- **Gotcha:** `pane.agent_status_changed` requires a concrete `pane_id` — you cannot
+  subscribe to it globally. Subscribing without one errors with
+  `missing field 'pane_id'`.
+- **Therefore:** subscribe to `pane.updated` (carries the whole pane object including
+  `agent_status`) plus `pane.created` / `pane.closed` / `pane.agent_detected`.
+  `pane.updated` is chatty (fires on scroll and output), so the daemon must diff
+  and only re-render when a rendered field actually changed.
+- Future phases already have what they need: `agent.focus`, `workspace.focus`,
+  `agent.prompt`, `agent.send_keys`.
+
+**Git root labels** — resolving `git rev-parse --show-toplevel` gives the useful
+name in every live case, notably `/dev/zephyr_cloudflow/src` -> `zephyr_cloudflow`
+where the basename `src` would have been useless.
+
+## Decisions
+
+| Area | Decision |
+| --- | --- |
+| Interaction | Display only; keys inert. Architecture must not preclude press actions later. |
+| Layout | Pinned slots first, remaining agents auto-flow into free keys. |
+| Key face | Status color bar + repo name + session name. |
+| Ordering | Stable (session, then workspace). Overflow evicts lowest priority. |
+| Animation | None. Static, fully event-driven. |
+| Lifecycle | Foreground CLI now; launchd later. |
+| Pin identity | `session + cwd`. |
+| Label | Git repo root basename. |
+| Stack | TypeScript on Bun. |
+
+## Architecture
+
+```
+herdr sockets (N)          sd-connect daemon              Stream Deck MK.2
+─────────────────         ────────────────────           ──────────────────
+zephyr/herdr.sock  ──┐    ┌──────────────┐
+canaries/herdr.sock ─┼──> │ SessionWatch │  discovery: rescan sessions dir
+(future sessions)  ──┘    ├──────────────┤
+                          │ HerdrClient  │  per session: agent.list + subscribe
+                          ├──────────────┤
+                          │  AgentStore  │  merged map, keyed session+pane_id
+                          ├──────────────┤
+                          │   Layout     │  pins -> slots, rest auto-flow
+                          ├──────────────┤
+                          │  Renderer    │  SVG -> sharp -> raw RGB, cached
+                          ├──────────────┤
+                          │  DeckDriver  │  diff vs on-screen, write changed keys
+                          └──────────────┘ ──────────────> 15 keys
+```
+
+Data flow is one-way: herdr events mutate the store, the store recomputes a
+desired 15-slot array, and the driver writes only the slots whose rendered bytes
+changed. Adding key presses later means adding one reverse edge from DeckDriver
+back to HerdrClient, nothing else changes.
+
+### Modules
+
+- `src/herdr/sessions.ts` — enumerate sessions from `~/.config/herdr/sessions/`,
+  verify each socket is live, rescan on an interval and on socket errors.
+- `src/herdr/client.ts` — one connection per session. Connect, `agent.list` for the
+  initial snapshot, `events.subscribe`, parse NDJSON, emit normalized changes,
+  reconnect with backoff on drop.
+- `src/model/store.ts` — merged agent map keyed `${session}:${pane_id}`. Holds only
+  render-relevant fields so diffing is cheap and `pane.updated` noise is absorbed.
+- `src/model/repo.ts` — cwd -> git root basename, cached per cwd (bounded).
+- `src/layout.ts` — pins then auto-flow then overflow eviction (see below).
+- `src/render/tile.ts` — SVG string -> sharp -> 72*72*3 raw RGB, LRU cached by the
+  tuple `(status, repo, session, truncation)`. Steady state does zero rendering.
+- `src/deck.ts` — open device, set brightness, write changed keys, clean shutdown.
+- `src/config.ts` — load and validate `~/.config/sd-connect/config.toml`.
+- `src/main.ts` — wire it up, handle SIGINT/SIGTERM.
+
+### Layout algorithm
+
+1. Place pinned agents on their configured key if that agent is present.
+2. Sort the rest by `(session name, workspace_id, pane_id)` — stable, so keys do
+   not shuffle when a status changes.
+3. Fill free keys in order.
+4. If more agents than free keys: drop by ascending priority
+   (`unknown` < `idle` < `working` < `done` < `blocked`), so blocked and done always
+   survive. If anything was dropped, the last key becomes a `+N more` tile.
+5. Unused keys render black.
+
+A pinned key stays black when its agent is absent — that is the point of pinning.
+
+### Config
+
+`~/.config/sd-connect/config.toml`
+
+```toml
+brightness = 70
+
+[colors]
+idle    = "#22c55e"
+working = "#3b82f6"
+blocked = "#ef4444"
+done    = "#eab308"
+unknown = "#6b7280"
+
+[[pins]]
+key     = 0
+session = "zephyr"
+cwd     = "/Users/jason.koon/dev/portal"
+
+[[pins]]
+key     = 1
+session = "canaries"
+cwd     = "/Users/jason.koon/dev/canaries"
+```
+
+Missing config is fine — defaults, no pins, pure auto-flow.
+
+## Build order
+
+1. **Scaffold** — `bun init`, deps (`@elgato-stream-deck/node`, `sharp`), tsconfig,
+   `.gitignore`. Encode the `close()` segfault workaround in the shutdown path
+   immediately, with a comment, so it never gets "cleaned up" into a crash.
+2. **Deck driver** — open, brightness, `renderKeys(slots)` writing only changed keys,
+   clean teardown. Smoke test with a static test pattern.
+3. **Tile renderer** — SVG template, truncation rules, LRU cache. Dump PNGs to disk
+   for eyeballing without hardware, then verify on the deck.
+4. **herdr client** — session discovery, connect, snapshot, subscribe, normalize,
+   reconnect. Test with a `--dump` mode that prints the merged model as text, no
+   deck involved. This is where most bugs will live, so keep it headless-testable.
+5. **Store + layout** — merge, diff, pins, ordering, overflow. Pure functions, unit
+   tested against fixture snapshots.
+6. **Wire up** — `bun run start`. Verify live: change an agent's state and watch the
+   key change; kill a herdr session and watch its keys clear and reconnect.
+7. **Polish** — config loading, `--once` render-and-exit for debugging, README.
+
+## Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| Bun segfault on `close()` | Confirmed; avoid `close()`, use `clearPanel()` + `process.exit(0)`. Fall back to Node 24 if other native crashes appear. |
+| `pane.updated` event storm | Diff on render-relevant fields only; renderer is cached; USB writes only on real change. |
+| No global agent-status subscription | Use `pane.updated` as the carrier, verified to include `agent_status`. |
+| Session starts/stops while running | Periodic rescan of the sessions dir plus reconnect-with-backoff. |
+| Deck unplugged mid-run | Catch write errors, poll for the device, re-open and full-repaint on return. |
+| Two panes, same session, same cwd | Pin matches the first by stable sort; the rest auto-flow. Documented, not an error. |
+
+## Out of scope for phase 1
+
+Key presses and actions, multi-page navigation, non-herdr data sources, launchd
+autostart, Stream Deck models other than MK.2.
