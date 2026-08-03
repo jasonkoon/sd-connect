@@ -169,6 +169,40 @@ in the log and presses will focus the pane without bringing the window forward:
 osascript is not allowed assistive access. (-1719)
 ```
 
+### Using this on more than one machine
+
+The daemon opens whichever Stream Deck is attached when it looks — no serial
+number or USB path is baked in anywhere — so the same checkout works on several
+machines with different physical decks, as long as they are the same model.
+
+Nothing machine-specific is committed. The plist is generated at install time
+from `launchd/*.plist.template` with that machine's project and node paths, and
+`~/.config/sd-connect/config.toml` lives outside the repo, so pins can differ
+per machine (home and work rarely have the same repos checked out).
+
+Per machine, once:
+
+```sh
+git clone <repo> && cd sd-connect
+npm install
+brew install node                 # if not already present
+./scripts/install-launchd.sh
+```
+
+Then approve the Accessibility prompt the first time you press a key.
+
+**No deck attached is fine.** The daemon starts, logs `no Stream Deck found;
+waiting for one to be plugged in`, and keeps polling herdr. When a deck appears
+it connects within about two seconds and paints the current state. Verified by
+starting with the deck unplugged and then plugging it in. So a laptop that moves
+between a deck at home and a deck at work needs no intervention: log in without
+one, plug in whichever is there, and it picks it up.
+
+**Different models would need work.** Key count already adapts, but tile
+rendering hardcodes 72x72. An XL (8x4 at 96px) or Mini (3x2 at 80px) would throw
+a RangeError on every write. Making `ICON_SIZE` come from the opened device is
+the fix if that ever matters.
+
 **If you reinstall the Elgato Stream Deck software**, disable its launch agent
 (`~/Library/LaunchAgents/com.elgato.StreamDeck.plist`). It claims the USB device
 exclusively at login and sd-connect will not be able to open the deck.

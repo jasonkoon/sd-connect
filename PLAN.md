@@ -228,6 +228,18 @@ Three things this surfaced, none of them predictable from the code:
 
 Per-frame logging became verbose-only here: launchd never rotates these logs.
 
+## Multiple machines
+
+Supported for identical models. The daemon opens whichever deck is present
+rather than matching a serial or USB path, the plist is generated per machine at
+install time, and config lives in ~/.config so pins can differ. Starting with no
+deck attached and hotplugging later is verified working: it waits, then connects
+within ~2s and paints.
+
+Mixed models are NOT supported: tile rendering hardcodes 72x72, so an XL (96px)
+or Mini (80px) would throw on every write. `ICON_SIZE` would need to come from
+the opened device.
+
 ## Out of scope
 
 Multi-page navigation, non-herdr data sources, Stream Deck models other than
