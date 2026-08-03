@@ -93,8 +93,14 @@ back to HerdrClient, nothing else changes.
   render-relevant fields so diffing is cheap and `pane.updated` noise is absorbed.
 - `src/model/repo.ts` — cwd -> git root basename, cached per cwd (bounded).
 - `src/layout.ts` — pins then auto-flow then overflow eviction (see below).
-- `src/render/tile.ts` — SVG string -> sharp -> 72*72*3 raw RGB, LRU cached by the
-  tuple `(status, repo, session, truncation)`. Steady state does zero rendering.
+- `src/render/tile.ts` — Slot -> 72*72*3 raw RGB via @napi-rs/canvas, LRU cached
+  by `(status, repo, session)`. Steady state does zero rendering.
+  NOT SVG-via-sharp: sharp 0.35 rasterises SVG with resvg, which has no font
+  backend, so `<text>` renders as nothing. Verified with a 0-light-pixel tile.
+  Canvas also returns raw pixels, so sharp is not needed anywhere.
+- `src/render/text.ts` — measured fitting. Repo names range from "db" to
+  "zephyr_cloudflow" (108px against ~68px usable), so sizes are measured, never
+  assumed: shrink to 12px, then wrap on a separator, then truncate.
 - `src/deck.ts` — open device, set brightness, write changed keys, clean shutdown.
 - `src/config.ts` — load and validate `~/.config/sd-connect/config.toml`.
 - `src/main.ts` — wire it up, handle SIGINT/SIGTERM.
@@ -141,13 +147,12 @@ Missing config is fine — defaults, no pins, pure auto-flow.
 
 ## Build order
 
-1. **Scaffold** — `bun init`, deps (`@elgato-stream-deck/node`, `sharp`), tsconfig,
-   `.gitignore`. Encode the `close()` segfault workaround in the shutdown path
-   immediately, with a comment, so it never gets "cleaned up" into a crash.
-2. **Deck driver** — open, brightness, `renderKeys(slots)` writing only changed keys,
-   clean teardown. Smoke test with a static test pattern.
-3. **Tile renderer** — SVG template, truncation rules, LRU cache. Dump PNGs to disk
-   for eyeballing without hardware, then verify on the deck.
+1. **Scaffold** — DONE. Deps are `@elgato-stream-deck/node` + `@napi-rs/canvas`
+   (not sharp, see below). Segfault workaround encoded in `deck.ts`.
+2. **Deck driver** — DONE. Open, brightness, diffed writes, clean teardown,
+   smoke test asserting the diff suppresses redundant writes.
+3. **Tile renderer** — DONE. Canvas drawing, measured fit, LRU cache, PNG dump +
+   contact sheet, on-hardware preview, 14 unit tests.
 4. **herdr client** — session discovery, connect, snapshot, subscribe, normalize,
    reconnect. Test with a `--dump` mode that prints the merged model as text, no
    deck involved. This is where most bugs will live, so keep it headless-testable.
@@ -162,6 +167,7 @@ Missing config is fine — defaults, no pins, pure auto-flow.
 | Risk | Mitigation |
 | --- | --- |
 | Bun segfault on `close()` | Confirmed; avoid `close()`, use `clearPanel()` + `process.exit(0)`. Fall back to Node 24 if other native crashes appear. |
+| No font rendering in sharp | Hit and resolved in step 2: switched to `@napi-rs/canvas`, which sees system fonts and removes the sharp dependency entirely. |
 | `pane.updated` event storm | Diff on render-relevant fields only; renderer is cached; USB writes only on real change. |
 | No global agent-status subscription | Use `pane.updated` as the carrier, verified to include `agent_status`. |
 | Session starts/stops while running | Periodic rescan of the sessions dir plus reconnect-with-backoff. |

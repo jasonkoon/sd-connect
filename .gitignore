@@ -9,3 +9,9 @@ bun.lockb
 # Scratch output from the tile renderer's PNG dump mode (build step 3)
 /tmp-tiles/
 .DS_Store
+
+# Something in the toolchain occasionally runs `pnpm install` here and leaves
+# stale lockfiles behind (they still referenced sharp after it was removed).
+# Bun is the package manager for this project; bun.lock is the source of truth.
+pnpm-lock.yaml
+pnpm-workspace.yaml

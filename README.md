@@ -21,6 +21,17 @@ See [PLAN.md](./PLAN.md) for the full design and build order.
 bun install
 ```
 
+## Previewing the key design
+
+```sh
+bun run dump          # writes tmp-tiles/*.png, including a 5x3 contact sheet
+bun run dump --scale 8
+bun run preview       # pushes the same samples to the real deck, Ctrl-C to exit
+```
+
+`dump` is for iterating on layout without hardware; `preview` is the check that
+matters, because a 6x PNG flatters a 72px LCD.
+
 ## Smoke test
 
 Verifies the device opens, renders, diffs redundant writes, and shuts down
@@ -55,8 +66,16 @@ a large comment in `src/deck.ts` explaining this — please do not "tidy it up" 
 adding `close()`, or shutdown will start crashing.
 
 **Tiles must be RGB, not RGBA.** `fillKeyBuffer` wants exactly `72*72*3` bytes
-with `{ format: 'rgb' }`. If you render with sharp, you need `.removeAlpha()`
-before `.raw()`, otherwise you get a `RangeError` about buffer length.
+with `{ format: 'rgb' }`, so the renderer drops the alpha channel that canvas
+gives it. Passing RGBA throws a `RangeError` about buffer length.
+
+**sharp cannot render text, so we do not use it.** sharp 0.35 rasterises SVG
+with resvg, which ships with no font backend: `<text>` elements silently
+disappear, and a test tile came back with 0 light pixels where the label should
+have been. `sharp.text()` is also unavailable (`VipsOperation: class "text" not
+found`). We use `@napi-rs/canvas` instead, which sees all 311 system font
+families and hands back raw pixels directly, so sharp is not a dependency at
+all. If you are tempted to "simplify" this back to SVG, you will get blank keys.
 
 Also note `device.NUM_KEYS` and `device.ICON_SIZE` read back as `undefined` under
 Bun, so `openDeck()` counts buttons from `device.CONTROLS` instead.
@@ -65,8 +84,21 @@ Bun, so `openDeck()` counts buttons from `device.CONTROLS` instead.
 
 ```
 src/
-  types.ts     domain types, status priority, agent keys
-  deck.ts      device lifecycle, diffed key writes
-  shutdown.ts  signal handling, cleanup with a watchdog
-  smoke.ts     step 1 hardware verification
+  types.ts          domain types, status priority, agent keys
+  deck.ts           device lifecycle, diffed key writes
+  shutdown.ts       signal handling, cleanup with a watchdog
+  smoke.ts          step 1 hardware verification
+  render/
+    theme.ts        colours, fonts, bar height
+    text.ts         measured fitting: shrink, wrap, then truncate
+    tile.ts         Slot -> 72x72x3 RGB, with an LRU cache
+    dump.ts         sample tiles as PNGs + contact sheet
+    preview.ts      sample tiles on real hardware
+    tile.test.ts    fit and cache behaviour
+```
+
+## Tests
+
+```sh
+bun test
 ```

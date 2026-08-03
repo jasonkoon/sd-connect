@@ -8,11 +8,13 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "smoke": "bun run src/smoke.ts",
+    "dump": "bun run src/render/dump.ts",
+    "preview": "bun run src/render/preview.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elgato-stream-deck/node": "^7.6.3",
-    "sharp": "^0.35.3"
+    "@napi-rs/canvas": "^1.0.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
