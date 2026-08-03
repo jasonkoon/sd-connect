@@ -140,8 +140,38 @@ Exit code `2` means no deck was found. Exit `1` means an assertion failed.
 ```sh
 npm start                # daemon: poll herdr, paint the deck, Ctrl-C to stop
 npm start -- --once      # paint one frame and exit
-npm start -- --verbose   # log every frame, even no-op ones
+npm start -- --verbose   # also log every repaint
 ```
+
+## Start at login
+
+```sh
+./scripts/install-launchd.sh     # install and start the launch agent
+./scripts/uninstall-launchd.sh   # remove it
+tail -f ~/Library/Logs/sd-connect/sd-connect.log
+```
+
+The installer is safe to re-run; use it to pick up code changes. It preflights
+the node binary and the native modules, so a broken setup fails there with an
+explanation rather than silently at next login.
+
+**Node comes from Homebrew on purpose.** launchd needs an absolute path, and a
+version-manager node (nvm, vite-plus, fnm) can be upgraded or pruned out from
+under the agent — which breaks startup at login with no obvious cause. Override
+with `--node /path/to/node` if you want something else.
+
+**Accessibility permission is required for window raising.** The first time the
+agent tries to raise a window, macOS prompts; approve it. A launch agent does not
+inherit the permission your terminal has, so before approving you will see this
+in the log and presses will focus the pane without bringing the window forward:
+
+```
+osascript is not allowed assistive access. (-1719)
+```
+
+**If you reinstall the Elgato Stream Deck software**, disable its launch agent
+(`~/Library/LaunchAgents/com.elgato.StreamDeck.plist`). It claims the USB device
+exclusively at login and sd-connect will not be able to open the deck.
 
 ## Platform notes
 
@@ -206,6 +236,8 @@ connections stay open.
 ## Layout
 
 ```
+launchd/            plist template for the login agent
+scripts/            install / uninstall the launch agent
 src/
   types.ts          domain types, status priority, agent keys
   deck.ts           device lifecycle, diffed key writes

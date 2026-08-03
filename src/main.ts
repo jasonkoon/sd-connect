@@ -1,9 +1,9 @@
 /**
  * sd-connect daemon: herdr agent status on a Stream Deck.
  *
- *   bun run start
- *   bun run start --once     paint one frame and exit
- *   bun run start --verbose  log every frame
+ *   npm start
+ *   npm start -- --once     paint one frame and exit
+ *   npm start -- --verbose  log every frame
  *
  * Data flows one way: poller -> layout -> renderer -> deck. Nothing here talks
  * back to herdr, which is what keeps phase 1 honest about being display-only.
@@ -142,7 +142,10 @@ class Display {
 
     try {
       const written = await deck.setKeys(tiles)
-      if (this.#verbose || written > 0) {
+      // Per-frame logging is verbose-only. Under launchd this log is never
+      // rotated, and an agent flipping between working and idle all day would
+      // otherwise grow it forever. Presses and failures are always logged.
+      if (this.#verbose && written > 0) {
         const extra = dropped.length > 0 ? ` (+${dropped.length} not shown)` : ''
         console.log(`[sd-connect] ${written} key(s) updated: ${describe(slots)}${extra}`)
       }
@@ -241,7 +244,9 @@ async function main(): Promise<void> {
         } else if (!result.raised && result.note) {
           // Focus worked inside herdr, but the window did not come forward.
           console.warn(`[sd-connect] focused ${agent.repo}, but no window raised: ${result.note}`)
-        } else if (flags.verbose) {
+        } else {
+          // Always logged, not just under --verbose: under launchd the log is
+          // the only way to see that a press did anything.
           console.log(`[sd-connect] jumped to ${agent.repo} (${agent.session}/${agent.paneId})`)
         }
       } finally {

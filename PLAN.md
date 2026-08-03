@@ -62,7 +62,7 @@ where the basename `src` would have been useless.
 | Key face | Status color bar + repo name + session name. |
 | Ordering | Stable (session, then workspace). Overflow evicts lowest priority. |
 | Animation | None. Static, fully event-driven. |
-| Lifecycle | Foreground CLI now; launchd later. |
+| Lifecycle | launchd agent at login (done), plus a foreground CLI for debugging. |
 | Pin identity | `session + cwd`. |
 | Label | Git repo root basename. |
 | Stack | TypeScript on Node 24 (started on Bun; moved after Bun segfaulted on unplug). |
@@ -205,8 +205,31 @@ Window raising is best-effort and configurable (`raise_window`), since it
 depends on Accessibility permission and on window titles carrying the session
 name.
 
+## Phase 3: launchd autostart (done)
+
+`scripts/install-launchd.sh` renders `launchd/*.plist.template` into
+`~/Library/LaunchAgents` and bootstraps it. RunAtLoad plus KeepAlive with a
+10s ThrottleInterval, logging to `~/Library/Logs/sd-connect/`.
+
+Three things this surfaced, none of them predictable from the code:
+
+- **Accessibility does not inherit into launchd.** The grant follows process
+  ancestry back to the terminal app, so the same osascript that works from a
+  Ghostty shell fails under launchd with `-1719`. It needs a one-time approval
+  of its own. A signed .app wrapper also works, but proved unnecessary once the
+  prompt was approved.
+- **`launchctl bootout` returns before teardown finishes.** Bootstrapping
+  immediately after fails with `Bootstrap failed: 5`, while bootout reports
+  success — so reinstall silently left nothing loaded, about two times in three.
+  The installer now waits for the old job to disappear and retries.
+- **Homebrew node, not the version-manager node.** launchd needs an absolute
+  path, and vite-plus/nvm builds get upgraded and pruned. Homebrew's node 26
+  was verified against the native modules and the full test suite.
+
+Per-frame logging became verbose-only here: launchd never rotates these logs.
+
 ## Out of scope
 
-Multi-page navigation, non-herdr data sources, launchd autostart, Stream Deck
-models other than MK.2, and any press action other than focus (prompting,
-sending keys) — the API supports them, but they are not wired up.
+Multi-page navigation, non-herdr data sources, Stream Deck models other than
+MK.2, and any press action other than focus (prompting, sending keys) — the API
+supports them, but they are not wired up.

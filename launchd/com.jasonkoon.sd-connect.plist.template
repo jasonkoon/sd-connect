@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  sd-connect launch agent.
+
+  Placeholders (__NODE__, __PROJECT__, __LABEL__) are substituted by
+  scripts/install-launchd.sh. Do not edit the installed copy in
+  ~/Library/LaunchAgents directly; edit this template and reinstall.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__PROJECT__/src/main.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!--
+    Restart if the daemon exits for any reason. It is meant to be always-on,
+    and it already survives the deck being unplugged on its own, so a restart
+    here means something genuinely unexpected happened.
+  -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!--
+    Do not respawn faster than this. Without a throttle, a daemon that fails
+    immediately (bad config, missing node) spins in a tight restart loop and
+    fills the log.
+  -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/sd-connect.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/sd-connect.error.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!--
+      launchd gives a minimal PATH. The daemon shells out to /usr/bin/osascript
+      by absolute path, so this is mostly belt and braces.
+    -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Unbuffered-ish logging so the log is useful while tailing it. -->
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+
+  <!--
+    Deliberately NOT set:
+
+    LimitLoadToSessionType Aqua — the default GUI-session bootstrap already
+    scopes this correctly, and setting it has been known to interfere with
+    Accessibility.
+
+    ProcessType Background — that lowers scheduling priority, which is wrong for
+    something meant to react to a key press.
+  -->
+</dict>
+</plist>
