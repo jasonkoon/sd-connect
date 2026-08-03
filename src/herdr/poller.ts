@@ -137,6 +137,9 @@ export class AgentPoller {
 
     try {
       const agents = await this.pollOnce()
+      // stop() may have been called while that poll was in flight. Emitting now
+      // would paint a frame during shutdown, after the deck has been blanked.
+      if (!this.#running) return
       const sig = signature(agents)
       if (sig !== this.#lastSignature) {
         this.#lastSignature = sig

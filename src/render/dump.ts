@@ -12,7 +12,7 @@
 import { createCanvas, type Canvas } from '@napi-rs/canvas'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { ICON_SIZE, KEY_COLUMNS, KEY_ROWS } from '../deck.ts'
-import type { Agent, AgentStatus, Slot } from '../types.ts'
+import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
 import { TileRenderer } from './tile.ts'
 
 const OUT_DIR = 'tmp-tiles'
@@ -50,7 +50,7 @@ const SAMPLES: Array<{ name: string; slot: Slot }> = [
   { name: '08-short', slot: { kind: 'agent', agent: agent('db', 'zephyr', 'idle') } },
   { name: '09-hyphen-wrap', slot: { kind: 'agent', agent: agent('winning-edge-coaching', 'koon', 'done') } },
   { name: '10-overflow', slot: { kind: 'overflow', count: 4 } },
-  { name: '11-empty', slot: { kind: 'empty' } },
+  { name: '11-empty', slot: PINNED_EMPTY_SLOT },
 ]
 
 function parseScale(): number {
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true })
 
   for (const sample of SAMPLES) {
-    const rgb = renderer.render(sample.slot, { pinnedEmpty: sample.name.includes('empty') })
+    const rgb = renderer.render(sample.slot)
     await writeFile(`${OUT_DIR}/${sample.name}.png`, toPng(rgb, scale))
   }
 
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
 
   for (let i = 0; i < KEY_COLUMNS * KEY_ROWS; i++) {
     const sample = SAMPLES[i]
-    const slot: Slot = sample?.slot ?? { kind: 'empty' }
+    const slot: Slot = sample?.slot ?? EMPTY_SLOT
     const rgb = renderer.render(slot)
     // Composite the canvas directly. Going via PNG and `Image.src = buffer`
     // silently produced a blank sheet: the decode is not synchronous, so every

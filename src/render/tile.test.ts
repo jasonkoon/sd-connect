@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, test } from 'node:test'
+import { expect } from '../expect.ts'
 import { createCanvas } from '@napi-rs/canvas'
 import { TILE_BYTES, ICON_SIZE } from '../deck.ts'
-import type { Agent, AgentStatus, Slot } from '../types.ts'
+import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
 import { TileRenderer } from './tile.ts'
 import { fitText } from './text.ts'
 import { DEFAULT_THEME } from './theme.ts'
@@ -82,7 +83,7 @@ describe('TileRenderer', () => {
     const r = new TileRenderer()
     for (const s of [
       slot(agent('portal')),
-      { kind: 'empty' } as Slot,
+      EMPTY_SLOT,
       { kind: 'overflow', count: 3 } as Slot,
     ]) {
       expect(r.render(s).length).toBe(TILE_BYTES)
@@ -131,8 +132,8 @@ describe('TileRenderer', () => {
 
   test('pinned-empty is distinguishable from plain empty', () => {
     const r = new TileRenderer()
-    const plain = r.render({ kind: 'empty' })
-    const pinned = r.render({ kind: 'empty' }, { pinnedEmpty: true })
+    const plain = r.render(EMPTY_SLOT)
+    const pinned = r.render(PINNED_EMPTY_SLOT)
     expect(plain.equals(pinned)).toBe(false)
   })
 

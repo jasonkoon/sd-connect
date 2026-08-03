@@ -29,8 +29,6 @@ const SESSION_BASELINE = ICON_SIZE - 6
 
 export interface RenderOptions {
   theme?: Theme
-  /** Render as a pinned-but-empty key rather than a plain blank. */
-  pinnedEmpty?: boolean
 }
 
 /**
@@ -60,10 +58,10 @@ export class TileRenderer {
   }
 
   /** Cache key covering every input that can change the pixels. */
-  #keyFor(slot: Slot, pinnedEmpty: boolean): string {
+  #keyFor(slot: Slot): string {
     switch (slot.kind) {
       case 'empty':
-        return pinnedEmpty ? 'pinned-empty' : 'empty'
+        return slot.pinned ? 'pinned-empty' : 'empty'
       case 'overflow':
         return `overflow:${slot.count}`
       case 'agent': {
@@ -73,9 +71,8 @@ export class TileRenderer {
     }
   }
 
-  render(slot: Slot, options: RenderOptions = {}): Buffer {
-    const pinnedEmpty = options.pinnedEmpty ?? false
-    const cacheKey = this.#keyFor(slot, pinnedEmpty)
+  render(slot: Slot): Buffer {
+    const cacheKey = this.#keyFor(slot)
 
     const cached = this.#cache.get(cacheKey)
     if (cached) {
@@ -87,7 +84,7 @@ export class TileRenderer {
     }
 
     this.#misses++
-    const tile = this.#draw(slot, pinnedEmpty)
+    const tile = this.#draw(slot)
 
     if (this.#cache.size >= this.#maxEntries) {
       const oldest = this.#cache.keys().next()
@@ -101,14 +98,14 @@ export class TileRenderer {
     this.#cache.clear()
   }
 
-  #draw(slot: Slot, pinnedEmpty: boolean): Buffer {
+  #draw(slot: Slot): Buffer {
     const ctx = this.#ctx
     const t = this.theme
 
     ctx.clearRect(0, 0, ICON_SIZE, ICON_SIZE)
 
     if (slot.kind === 'empty') {
-      ctx.fillStyle = pinnedEmpty ? t.pinnedEmptyBackground : '#000000'
+      ctx.fillStyle = slot.pinned ? t.pinnedEmptyBackground : '#000000'
       ctx.fillRect(0, 0, ICON_SIZE, ICON_SIZE)
       return this.#toRgb()
     }

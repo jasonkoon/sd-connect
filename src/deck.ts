@@ -100,34 +100,42 @@ export class Deck {
   }
 
   /**
-   * Release the device as far as is safe on this platform.
+   * Attach a handler for device-level errors.
    *
-   * !!! DO NOT ADD `device.close()` HERE. !!!
+   * node-hid emits these on its read loop, notably when the deck is unplugged
+   * ('could not read from HID device'). Without a listener attached, an 'error'
+   * event on an EventEmitter becomes an unhandled exception and takes the
+   * process down, so the daemon must always register one.
+   */
+  onError(handler: (error: Error) => void): void {
+    this.device.on('error', (err: unknown) => {
+      handler(err instanceof Error ? err : new Error(String(err)))
+    })
+  }
+
+  /**
+   * Blank the panel and release the HID handle.
    *
-   * Verified on Bun 1.3.2 / macOS 26.6 / node-hid via @elgato-stream-deck/node
-   * 7.6.3: calling close() reliably segfaults the process with
-   *   `panic(main thread): Segmentation fault at address 0x20`
-   * inside the native addon's teardown. Open, render, brightness and clearPanel
-   * are all fine; only close() crashes.
-   *
-   * We therefore blank the panel and let process exit reclaim the handle. The OS
-   * closes the HID descriptor for us, so nothing actually leaks. If this ever
-   * gets "tidied up" by adding close(), shutdown will start crashing and the
-   * deck will be left showing a stale frame.
-   *
-   * Re-test with: `bun -e "import {listStreamDecks,openStreamDeck} from
-   * '@elgato-stream-deck/node'; const d=await openStreamDeck((await
-   * listStreamDecks())[0].path); await d.close()"`
-   * If that exits cleanly on a future Bun, this workaround can be revisited.
+   * Historical note: under Bun, `close()` segfaulted the process, so an earlier
+   * version of this deliberately skipped it. That was one of the reasons this
+   * project runs on Node, where close() is clean. Both steps are best-effort,
+   * because the usual reason for shutting down mid-flight is that the deck was
+   * unplugged, and failing to tidy up a device that is already gone must not
+   * turn into a crash on exit.
    */
   async shutdown(): Promise<void> {
     if (this.#closed) return
-    try {
-      await this.clear()
-    } catch {
-      // Deck may already be unplugged; a failed blank is not worth crashing over.
-    }
     this.#closed = true
+    try {
+      await this.device.clearPanel()
+    } catch {
+      // Already unplugged; nothing to blank.
+    }
+    try {
+      await this.device.close()
+    } catch {
+      // Ditto: the OS reclaims the descriptor on exit regardless.
+    }
   }
 
   get closed(): boolean {

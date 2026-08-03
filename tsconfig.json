@@ -2,8 +2,8 @@
   "compilerOptions": {
     "lib": ["ESNext"],
     "target": "ESNext",
-    "module": "Preserve",
-    "moduleResolution": "bundler",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "moduleDetection": "force",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -15,7 +15,7 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
 
-    "types": ["bun"]
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

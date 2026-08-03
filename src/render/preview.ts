@@ -9,7 +9,7 @@
 
 import { DeckUnavailableError, openDeck, type Deck } from '../deck.ts'
 import { installShutdownHandlers, onShutdown } from '../shutdown.ts'
-import type { Agent, AgentStatus, Slot } from '../types.ts'
+import { EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
 import { TileRenderer } from './tile.ts'
 
 function agent(repo: string, session: string, status: AgentStatus): Agent {
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
 
   const renderer = new TileRenderer()
   const tiles = Array.from({ length: deck.keyCount }, (_, i) =>
-    renderer.render(SLOTS[i] ?? { kind: 'empty' }),
+    renderer.render(SLOTS[i] ?? EMPTY_SLOT),
   )
 
   const written = await deck.setKeys(tiles)

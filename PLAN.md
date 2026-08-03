@@ -65,7 +65,7 @@ where the basename `src` would have been useless.
 | Lifecycle | Foreground CLI now; launchd later. |
 | Pin identity | `session + cwd`. |
 | Label | Git repo root basename. |
-| Stack | TypeScript on Bun. |
+| Stack | TypeScript on Node 24 (started on Bun; moved after Bun segfaulted on unplug). |
 
 ## Architecture
 
@@ -159,8 +159,8 @@ Missing config is fine — defaults, no pins, pure auto-flow.
 
 ## Build order
 
-1. **Scaffold** — DONE. Deps are `@elgato-stream-deck/node` + `@napi-rs/canvas`
-   (not sharp, see below). Segfault workaround encoded in `deck.ts`.
+1. **Scaffold** — DONE. Deps are `@elgato-stream-deck/node`, `@napi-rs/canvas`
+   and `smol-toml`. Runs on Node 24 with native TypeScript, no build step.
 2. **Deck driver** — DONE. Open, brightness, diffed writes, clean teardown,
    smoke test asserting the diff suppresses redundant writes.
 3. **Tile renderer** — DONE. Canvas drawing, measured fit, LRU cache, PNG dump +
@@ -169,17 +169,18 @@ Missing config is fine — defaults, no pins, pure auto-flow.
    request client, polling loop that emits only real changes, `watch` mode.
    19 tests against a fake herdr server. Verified live: prompting an agent
    produced `done -> working -> done` on the watch output.
-5. **Store + layout** — merge, diff, pins, ordering, overflow. Pure functions, unit
-   tested against fixture snapshots.
-6. **Wire up** — `bun run start`. Verify live: change an agent's state and watch the
-   key change; kill a herdr session and watch its keys clear and reconnect.
+5. **Store + layout** — DONE. Pins, stable auto-flow, overflow eviction, config
+   loading and validation. 25 pure-function tests.
+6. **Wire up** — DONE. `npm start`. Verified live: agent state changes repaint
+   exactly one key; a dead session is logged once and isolated; the deck can be
+   unplugged and replugged and the daemon recovers and repaints.
 7. **Polish** — config loading, `--once` render-and-exit for debugging, README.
 
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| Bun segfault on `close()` | Confirmed; avoid `close()`, use `clearPanel()` + `process.exit(0)`. Fall back to Node 24 if other native crashes appear. |
+| Bun segfault on `close()` AND on unplug | RESOLVED by moving to Node 24. Bun died outright when the deck was unplugged, so no reconnect was possible; Node raises a catchable error. Verified by physically unplugging. |
 | No font rendering in sharp | Hit and resolved in step 2: switched to `@napi-rs/canvas`, which sees system fonts and removes the sharp dependency entirely. |
 | Event stream is noisy (14/s) and does not carry status changes | Do not subscribe at all in phase 1. Poll `agent.list` (0.84ms) and diff. |
 | Polling adds latency to status changes | ~400ms interval, well under human glance latency. Revisit if herdr gains a real status event. |

@@ -1,6 +1,7 @@
-import { describe, expect, test, afterEach } from 'bun:test'
+import { afterEach, describe, test } from 'node:test'
+import { expect } from '../expect.ts'
 import { createServer, type Server } from 'node:net'
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HerdrError, listAgents, parseAgentList, request } from './protocol.ts'
@@ -40,6 +41,23 @@ async function fakeServer(
 
 async function tempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sd-connect-test-'))
+}
+
+/**
+ * Create a socket file with nothing listening on it, as a stopped herdr session
+ * leaves behind.
+ *
+ * Node's net.Server unlinks its socket path on close(), so simply closing a
+ * server does not reproduce this. Listening on a temporary path and renaming it
+ * while still live does: close() then unlinks the original (now absent) name and
+ * leaves the renamed file orphaned on disk.
+ */
+async function staleSocket(socketPath: string): Promise<void> {
+  const server = createServer(() => {})
+  const tempPath = `${socketPath}.live`
+  await new Promise<void>((resolve) => server.listen(tempPath, resolve))
+  await rename(tempPath, socketPath)
+  await new Promise<void>((resolve) => server.close(() => resolve()))
 }
 
 function rawAgent(overrides: Record<string, unknown> = {}) {
@@ -157,9 +175,10 @@ describe('discoverSessions', () => {
     const server = await fakeServer(() => ({ type: 'pong' }), join(dir, 'live', 'herdr.sock'))
     expect(server.listening).toBe(true)
 
-    // A stopped session leaves its socket file behind.
-    const dead = await fakeServer(() => ({}), join(dir, 'stale', 'herdr.sock'))
-    await new Promise<void>((r) => dead.close(() => r()))
+    // A stopped herdr leaves its socket file behind, which is the case this
+    // covers. Node's net.Server unlinks the path on close, so the stale file has
+    // to be recreated by hand rather than by closing a server.
+    await staleSocket(join(dir, 'stale', 'herdr.sock'))
 
     expect((await discoverSessions(dir)).map((s) => s.name)).toEqual(['live', 'stale'])
     expect((await discoverLiveSessions(dir)).map((s) => s.name)).toEqual(['live'])
@@ -215,8 +234,7 @@ describe('AgentPoller', () => {
   test('a dead session does not stop the others being reported', async () => {
     const dir = await twoSessions()
     await fakeServer(() => ({ agents: [rawAgent()] }), join(dir, 'alpha', 'herdr.sock'))
-    const dead = await fakeServer(() => ({}), join(dir, 'beta', 'herdr.sock'))
-    await new Promise<void>((r) => dead.close(() => r()))
+    await staleSocket(join(dir, 'beta', 'herdr.sock'))
 
     const errors: string[] = []
     const poller = new AgentPoller({
@@ -261,6 +279,7 @@ describe('AgentPoller', () => {
     status = 'working'
     await new Promise((r) => setTimeout(r, 120))
     poller.stop()
+    await new Promise((r) => setTimeout(r, 40))
 
     expect(frames).toHaveLength(2)
     expect(frames[1]?.[0]?.status).toBe('working')
@@ -279,8 +298,13 @@ describe('AgentPoller', () => {
     await poller.start()
     await new Promise((r) => setTimeout(r, 60))
     poller.stop()
+
+    // A poll already in flight when stop() lands is still allowed to finish, so
+    // settle first and only then snapshot the count. Reading `calls` on the
+    // same tick as stop() makes this test flaky, not the poller.
+    await new Promise((r) => setTimeout(r, 40))
     const after = calls
-    await new Promise((r) => setTimeout(r, 60))
+    await new Promise((r) => setTimeout(r, 80))
     expect(calls).toBe(after)
   })
 

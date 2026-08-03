@@ -4,24 +4,25 @@
   "description": "Drive an Elgato Stream Deck MK.2 directly to show live herdr agent status",
   "type": "module",
   "private": true,
-  "module": "src/main.ts",
+  "engines": {
+    "node": ">=22.6"
+  },
   "scripts": {
-    "start": "bun run src/main.ts",
-    "smoke": "bun run src/smoke.ts",
-    "dump": "bun run src/render/dump.ts",
-    "preview": "bun run src/render/preview.ts",
-    "watch": "bun run src/herdr/watch.ts",
+    "start": "node src/main.ts",
+    "smoke": "node src/smoke.ts",
+    "dump": "node src/render/dump.ts",
+    "preview": "node src/render/preview.ts",
+    "watch": "node src/herdr/watch.ts",
+    "test": "node --test 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elgato-stream-deck/node": "^7.6.3",
-    "@napi-rs/canvas": "^1.0.3"
+    "@napi-rs/canvas": "^1.0.3",
+    "smol-toml": "^1.7.1"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/node": "^26.1.2",
     "typescript": "^5"
-  },
-  "trustedDependencies": [
-    "@julusian/jpeg-turbo"
-  ]
+  }
 }

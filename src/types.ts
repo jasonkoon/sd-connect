@@ -62,10 +62,17 @@ export function renderIdentity(agent: Agent): string {
   return `${agent.status}\u0000${agent.repo}\u0000${agent.session}`
 }
 
-/** What occupies a single Stream Deck key. */
+/**
+ * What occupies a single Stream Deck key.
+ *
+ * `empty.pinned` distinguishes a key held open by a pin whose agent is not
+ * currently running from a key that is simply unused. A reserved-but-dark key
+ * is the whole point of pinning, so it is drawn slightly differently.
+ */
 export type Slot =
-  | { kind: 'empty' }
+  | { kind: 'empty'; pinned: boolean }
   | { kind: 'agent'; agent: Agent }
   | { kind: 'overflow'; count: number }
 
-export const EMPTY_SLOT: Slot = { kind: 'empty' }
+export const EMPTY_SLOT: Slot = { kind: 'empty', pinned: false }
+export const PINNED_EMPTY_SLOT: Slot = { kind: 'empty', pinned: true }

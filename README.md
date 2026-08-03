@@ -12,31 +12,62 @@ See [PLAN.md](./PLAN.md) for the full design and build order.
 ## Requirements
 
 - macOS with a Stream Deck MK.2 attached
-- [Bun](https://bun.sh) 1.3+
+- [Node](https://nodejs.org) 22.6+ (runs the TypeScript directly, no build step)
 - The Elgato Stream Deck app **not** running (it claims the USB HID device)
 
 ## Setup
 
 ```sh
-bun install
+npm install
 ```
 
 ## Previewing the key design
 
 ```sh
-bun run dump          # writes tmp-tiles/*.png, including a 5x3 contact sheet
-bun run dump --scale 8
-bun run preview       # pushes the same samples to the real deck, Ctrl-C to exit
+npm run dump          # writes tmp-tiles/*.png, including a 5x3 contact sheet
+npm run dump --scale 8
+npm run preview       # pushes the same samples to the real deck, Ctrl-C to exit
 ```
 
 `dump` is for iterating on layout without hardware; `preview` is the check that
 matters, because a 6x PNG flatters a 72px LCD.
 
+## Configuration
+
+Optional, at `~/.config/sd-connect/config.toml`. A missing file means defaults;
+a bad value is reported by name and ignored rather than being fatal.
+
+```toml
+brightness = 70
+poll_interval_ms = 400
+
+[colors]
+idle    = "#22c55e"
+working = "#3b82f6"
+blocked = "#ef4444"
+done    = "#eab308"
+unknown = "#6b7280"
+
+# Pin an agent to a fixed key, identified by session + cwd.
+# Keys are numbered left to right, top to bottom: 0-4, 5-9, 10-14.
+# A pinned key stays dark when that agent is not running.
+[[pins]]
+key     = 0
+session = "zephyr"
+cwd     = "/Users/you/dev/sd-connect"
+```
+
+Unpinned agents flow into whatever keys are left, in a stable order (session,
+then workspace) so they do not shuffle when a status changes. If there are more
+agents than keys, the least interesting are dropped first (unknown, then idle,
+then working) so `blocked` and `done` always survive, and the last key becomes a
+`+N more` tile.
+
 ## Watching herdr (no hardware needed)
 
 ```sh
-bun run watch          # stream agent status as it changes
-bun run watch --once   # one snapshot, then exit
+npm run watch          # stream agent status as it changes
+npm run watch -- --once   # one snapshot, then exit
 ```
 
 Example:
@@ -58,7 +89,7 @@ Verifies the device opens, renders, diffs redundant writes, and shuts down
 cleanly. Paints one key per status colour, then blanks the panel.
 
 ```sh
-bun run smoke
+npm run smoke
 ```
 
 Expected output:
@@ -73,17 +104,32 @@ Expected output:
 
 Exit code `2` means no deck was found. Exit `1` means an assertion failed.
 
+## Running it
+
+```sh
+npm start                # daemon: poll herdr, paint the deck, Ctrl-C to stop
+npm start -- --once      # paint one frame and exit
+npm start -- --verbose   # log every frame, even no-op ones
+```
+
 ## Platform notes
 
-Two things about this stack are non-obvious and cost real debugging time.
+Several things about this stack are non-obvious and cost real debugging time.
 
-**`streamDeck.close()` segfaults Bun.** On Bun 1.3.2 / macOS 26.6 with
-`@elgato-stream-deck/node` 7.6.3, calling `close()` panics the process with
-`Segmentation fault at address 0x20` inside the native addon teardown. Open,
-render, `setBrightness` and `clearPanel` are all fine. `Deck.shutdown()`
-therefore blanks the panel and lets process exit reclaim the descriptor. There is
-a large comment in `src/deck.ts` explaining this — please do not "tidy it up" by
-adding `close()`, or shutdown will start crashing.
+**Why Node and not Bun.** This started on Bun. Bun segfaults
+(`Segmentation fault at address 0x20`, inside node-hid's native teardown) both
+when calling `streamDeck.close()` and, fatally, when the deck is unplugged while
+the daemon is running — the process dies outright, so no reconnect logic can
+ever run. Node 24 turns the same unplug into an ordinary catchable error
+(`Cannot write to hid device: Device is disconnected`) and closes cleanly. Both
+behaviours were verified on real hardware by physically unplugging the device.
+Do not move this back to Bun without re-testing an unplug.
+
+**Always attach a device error listener.** node-hid emits `error` from its read
+loop when the deck goes away (`could not read from HID device`). An unhandled
+`error` event on an EventEmitter is a fatal exception, so `Deck.onError()` exists
+and the daemon always registers it. Without it, an unplug kills the process even
+on Node.
 
 **Tiles must be RGB, not RGBA.** `fillKeyBuffer` wants exactly `72*72*3` bytes
 with `{ format: 'rgb' }`, so the renderer drops the alpha channel that canvas
@@ -97,8 +143,13 @@ found`). We use `@napi-rs/canvas` instead, which sees all 311 system font
 families and hands back raw pixels directly, so sharp is not a dependency at
 all. If you are tempted to "simplify" this back to SVG, you will get blank keys.
 
-Also note `device.NUM_KEYS` and `device.ICON_SIZE` read back as `undefined` under
-Bun, so `openDeck()` counts buttons from `device.CONTROLS` instead.
+Also note `device.NUM_KEYS` and `device.ICON_SIZE` read back as `undefined`, so
+`openDeck()` counts buttons from `device.CONTROLS` instead.
+
+**Node unlinks Unix socket files on `server.close()`.** Bun does not. This matters
+for tests that need to simulate a stopped herdr session, which leaves its socket
+file behind; see `staleSocket()` in the herdr tests for the rename trick that
+reproduces it.
 
 ## herdr API notes
 
@@ -135,6 +186,11 @@ src/
     poller.ts       poll agent.list, emit only real changes
     watch.ts        headless view of the merged model
     herdr.test.ts   protocol, discovery and polling, vs a fake server
+  main.ts           the daemon: poller -> layout -> renderer -> deck
+  config.ts         ~/.config/sd-connect/config.toml, validated
+  layout.ts         pins, auto-flow, overflow eviction
+  layout.test.ts    layout and config
+  expect.ts         tiny expect() shim over node:assert
   render/
     theme.ts        colours, fonts, bar height
     text.ts         measured fitting: shrink, wrap, then truncate
@@ -147,5 +203,5 @@ src/
 ## Tests
 
 ```sh
-bun test
+npm test
 ```
