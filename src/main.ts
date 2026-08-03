@@ -11,6 +11,7 @@
 
 import { loadConfig } from './config.ts'
 import { Deck, DeckUnavailableError, deckPresent, openDeck } from './deck.ts'
+import { focusAgent } from './focus.ts'
 import { AgentPoller } from './herdr/poller.ts'
 import { layout } from './layout.ts'
 import { TileRenderer } from './render/tile.ts'
@@ -59,6 +60,9 @@ class Display {
   #verbose: boolean
   #reconnecting = false
   #stopped = false
+  /** What is on each key right now, so a press can be resolved to an agent. */
+  #currentSlots: Slot[] = []
+  #onPress: ((agent: Agent) => void) | null = null
 
   constructor(opts: {
     renderer: TileRenderer
@@ -70,6 +74,17 @@ class Display {
     this.#brightness = opts.brightness
     this.#pins = opts.pins
     this.#verbose = opts.verbose
+  }
+
+  /** Register the handler invoked when a key showing an agent is pressed. */
+  onPress(handler: (agent: Agent) => void): void {
+    this.#onPress = handler
+  }
+
+  /** The agent displayed on a key, or null for empty and overflow keys. */
+  agentAt(index: number): Agent | null {
+    const slot = this.#currentSlots[index]
+    return slot?.kind === 'agent' ? slot.agent : null
   }
 
   get connected(): boolean {
@@ -85,6 +100,12 @@ class Display {
       deck.onError((error) => {
         console.error(`[sd-connect] deck error: ${error.message}`)
         this.#handleDisconnect()
+      })
+      // Act on release rather than press: 'up' is what people expect from a
+      // button, and it avoids firing twice if a key is held.
+      deck.onKeyUp((index) => {
+        const agent = this.agentAt(index)
+        if (agent) this.#onPress?.(agent)
       })
       this.#deck = deck
       console.log(`[sd-connect] deck connected: ${deck.device.MODEL}, ${deck.keyCount} keys`)
@@ -116,6 +137,7 @@ class Display {
     if (!deck) return
 
     const { slots, dropped } = layout(agents, { keyCount: deck.keyCount, pins: this.#pins })
+    this.#currentSlots = slots
     const tiles = slots.map((slot) => this.#renderer.render(slot))
 
     try {
@@ -199,6 +221,34 @@ async function main(): Promise<void> {
     },
   })
   onShutdown(() => poller.stop())
+
+  // A press jumps to that agent. Guarded so a burst of presses cannot pile up
+  // overlapping AppleScript calls, which are the slow part (~140ms).
+  let jumping = false
+  display.onPress((agent) => {
+    if (jumping) return
+    jumping = true
+    void (async () => {
+      try {
+        const socketPath = poller.socketFor(agent.session)
+        if (!socketPath) {
+          console.error(`[sd-connect] cannot focus ${agent.repo}: session '${agent.session}' is gone`)
+          return
+        }
+        const result = await focusAgent(agent, socketPath, { raiseWindow: config.raiseWindow })
+        if (!result.focused) {
+          console.error(`[sd-connect] focus failed for ${agent.repo}: ${result.note}`)
+        } else if (!result.raised && result.note) {
+          // Focus worked inside herdr, but the window did not come forward.
+          console.warn(`[sd-connect] focused ${agent.repo}, but no window raised: ${result.note}`)
+        } else if (flags.verbose) {
+          console.log(`[sd-connect] jumped to ${agent.repo} (${agent.session}/${agent.paneId})`)
+        }
+      } finally {
+        jumping = false
+      }
+    })()
+  })
 
   await poller.start()
   console.log(`[sd-connect] polling ${poller.sessions.length} session(s) every ${config.pollIntervalMs}ms`)

@@ -57,7 +57,7 @@ where the basename `src` would have been useless.
 
 | Area | Decision |
 | --- | --- |
-| Interaction | Display only; keys inert. Architecture must not preclude press actions later. |
+| Interaction | Phase 1 display only. Phase 2 (done): press = jump to that agent. |
 | Layout | Pinned slots first, remaining agents auto-flow into free keys. |
 | Key face | Status color bar + repo name + session name. |
 | Ordering | Stable (session, then workspace). Overflow evicts lowest priority. |
@@ -188,7 +188,25 @@ Missing config is fine — defaults, no pins, pure auto-flow.
 | Deck unplugged mid-run | Catch write errors, poll for the device, re-open and full-repaint on return. |
 | Two panes, same session, same cwd | Pin matches the first by stable sort; the rest auto-flow. Documented, not an error. |
 
-## Out of scope for phase 1
+## Phase 2: key presses (done)
 
-Key presses and actions, multi-page navigation, non-herdr data sources, launchd
-autostart, Stream Deck models other than MK.2.
+Pressing a key jumps to that agent. Two steps are required, because herdr and
+the window server know different things:
+
+1. AppleScript raises the Ghostty window whose title mentions the session.
+   herdr does not know its OS window exists.
+2. `agent.focus` with the pane id moves workspace, tab and pane focus together.
+
+Measured: `agent.focus` is 8ms, the AppleScript raise is ~140ms. Verified that
+step 2 alone is insufficient: focusing a canaries agent while the zephyr window
+was frontmost moved focus inside canaries but left zephyr on screen.
+
+Window raising is best-effort and configurable (`raise_window`), since it
+depends on Accessibility permission and on window titles carrying the session
+name.
+
+## Out of scope
+
+Multi-page navigation, non-herdr data sources, launchd autostart, Stream Deck
+models other than MK.2, and any press action other than focus (prompting,
+sending keys) — the API supports them, but they are not wired up.

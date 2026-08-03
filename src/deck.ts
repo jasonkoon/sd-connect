@@ -114,6 +114,18 @@ export class Deck {
   }
 
   /**
+   * Handle key releases.
+   *
+   * 'up' rather than 'down': it matches how buttons normally behave, and a held
+   * key produces exactly one action instead of repeating.
+   */
+  onKeyUp(handler: (index: number) => void): void {
+    this.device.on('up', (control: { index?: number }) => {
+      if (typeof control?.index === 'number') handler(control.index)
+    })
+  }
+
+  /**
    * Blank the panel and release the HID handle.
    *
    * Historical note: under Bun, `close()` segfaulted the process, so an earlier

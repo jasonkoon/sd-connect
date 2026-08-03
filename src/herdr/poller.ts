@@ -91,6 +91,11 @@ export class AgentPoller {
     return this.#sessions
   }
 
+  /** Socket path for a session name, or null if it is not currently known. */
+  socketFor(session: string): string | null {
+    return this.#sessions.find((s) => s.name === session)?.socketPath ?? null
+  }
+
   async start(): Promise<void> {
     if (this.#running) return
     this.#running = true

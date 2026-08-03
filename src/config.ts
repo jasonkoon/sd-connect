@@ -17,6 +17,12 @@ import { DEFAULT_THEME, type Theme } from './render/theme.ts'
 export interface Config {
   brightness: number
   pollIntervalMs: number
+  /**
+   * Raise the terminal window on a key press. Needs Accessibility permission
+   * and a terminal whose window titles mention the herdr session name. Turn it
+   * off to keep presses purely inside herdr.
+   */
+  raiseWindow: boolean
   pins: Pin[]
   theme: Theme
 }
@@ -24,6 +30,7 @@ export interface Config {
 export const DEFAULT_CONFIG: Config = {
   brightness: 70,
   pollIntervalMs: 400,
+  raiseWindow: true,
   pins: [],
   theme: DEFAULT_THEME,
 }
@@ -81,6 +88,14 @@ export function parseConfig(text: string): ParseResult {
       warnings.push(`poll_interval_ms must be a number >= 50, got ${JSON.stringify(value)}`)
     } else {
       config.pollIntervalMs = value
+    }
+  }
+
+  if (raw.raise_window !== undefined) {
+    if (typeof raw.raise_window !== 'boolean') {
+      warnings.push(`raise_window must be true or false, got ${JSON.stringify(raw.raise_window)}`)
+    } else {
+      config.raiseWindow = raw.raise_window
     }
   }
 

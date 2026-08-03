@@ -3,9 +3,9 @@
 Drive an Elgato Stream Deck MK.2 directly — no Elgato software — to show the live
 status of every agent across all [herdr](https://github.com/) sessions.
 
-Phase 1 is a read-only status wall: each key shows one agent as a status colour
-bar plus its repo and session name. Keys are inert for now; press actions come
-later.
+Each key shows one agent as a status colour bar plus its repo and session name.
+Pressing a key jumps to that agent: it raises the terminal window for that herdr
+session and focuses the right workspace, tab and pane.
 
 See [PLAN.md](./PLAN.md) for the full design and build order.
 
@@ -41,6 +41,10 @@ a bad value is reported by name and ignored rather than being fatal.
 brightness = 70
 poll_interval_ms = 400
 
+# Raise the terminal window when a key is pressed. Requires Accessibility
+# permission. Set to false to keep presses purely inside herdr.
+raise_window = true
+
 [colors]
 idle    = "#22c55e"
 working = "#3b82f6"
@@ -62,6 +66,33 @@ then workspace) so they do not shuffle when a status changes. If there are more
 agents than keys, the least interesting are dropped first (unknown, then idle,
 then working) so `blocked` and `done` always survive, and the last key becomes a
 `+N more` tile.
+
+## Pressing keys
+
+A press jumps to that agent, in two steps:
+
+1. Raise the terminal window whose title mentions that herdr session.
+2. Call herdr's `agent.focus`, which moves workspace, tab and pane focus at once.
+
+Both steps are needed. `agent.focus` alone moves focus *inside* a session but
+does not touch the window server, so focusing a `canaries` agent while the
+`zephyr` window is frontmost changes nothing you can see. This was verified by
+doing exactly that.
+
+Step 1 is AppleScript UI scripting against Ghostty, matching the session name
+against window titles (herdr names its client windows
+`herdr session attach <name>`). That means it depends on:
+
+- Accessibility permission for whatever runs the daemon
+- a terminal whose window titles contain the session name
+
+If the window cannot be found, the press still focuses inside herdr and logs a
+warning, so it degrades rather than failing outright. Set `raise_window = false`
+to skip step 1 entirely.
+
+Presses act on key *release*, so holding a key does one thing rather than
+repeating, and overlapping presses are ignored while a jump is in flight.
+Pressing an empty or `+N more` key does nothing.
 
 ## Watching herdr (no hardware needed)
 
@@ -189,6 +220,8 @@ src/
   main.ts           the daemon: poller -> layout -> renderer -> deck
   config.ts         ~/.config/sd-connect/config.toml, validated
   layout.ts         pins, auto-flow, overflow eviction
+  focus.ts          key press -> raise window + herdr agent.focus
+  focus.test.ts     focus behaviour and its failure modes
   layout.test.ts    layout and config
   expect.ts         tiny expect() shim over node:assert
   render/
