@@ -9,10 +9,11 @@
  * deck, which is the only way to tell whether it reads at a glance.
  */
 
-import { createCanvas, type Canvas } from '@napi-rs/canvas'
+import { createCanvas } from '@napi-rs/canvas'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { ICON_SIZE, KEY_COLUMNS, KEY_ROWS } from '../deck.ts'
 import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
+import { toCanvas, toPng } from './png.ts'
 import { TileRenderer } from './tile.ts'
 
 const OUT_DIR = 'tmp-tiles'
@@ -58,31 +59,6 @@ function parseScale(): number {
   if (i === -1) return 6
   const v = Number(process.argv[i + 1])
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : 6
-}
-
-/** RGB buffer -> a 1:1 canvas holding those pixels. */
-function toCanvas(rgb: Buffer): Canvas {
-  const canvas = createCanvas(ICON_SIZE, ICON_SIZE)
-  const ctx = canvas.getContext('2d')
-  const image = ctx.createImageData(ICON_SIZE, ICON_SIZE)
-  for (let src = 0, dst = 0; src < rgb.length; src += 3, dst += 4) {
-    image.data[dst] = rgb[src] as number
-    image.data[dst + 1] = rgb[src + 1] as number
-    image.data[dst + 2] = rgb[src + 2] as number
-    image.data[dst + 3] = 255
-  }
-  ctx.putImageData(image, 0, 0)
-  return canvas
-}
-
-/** RGB buffer -> PNG, upscaled nearest-neighbour so pixels stay crisp. */
-function toPng(rgb: Buffer, scale: number): Buffer {
-  const size = ICON_SIZE * scale
-  const canvas = createCanvas(size, size)
-  const ctx = canvas.getContext('2d')
-  ctx.imageSmoothingEnabled = false
-  ctx.drawImage(toCanvas(rgb), 0, 0, size, size)
-  return canvas.toBuffer('image/png')
 }
 
 async function main(): Promise<void> {

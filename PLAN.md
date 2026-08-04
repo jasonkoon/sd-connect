@@ -58,6 +58,7 @@ where the basename `src` would have been useless.
 | Area | Decision |
 | --- | --- |
 | Interaction | Phase 1 display only. Phase 2 (done): press = jump to that agent. |
+| Deckless use | Phase 4 (done): same frame served on localhost, click = press. |
 | Layout | Pinned slots first, remaining agents auto-flow into free keys. |
 | Key face | Status color bar + repo name + session name. |
 | Ordering | Stable (session, then workspace). Overflow evicts lowest priority. |
@@ -228,6 +229,48 @@ Three things this surfaced, none of them predictable from the code:
 
 Per-frame logging became verbose-only here: launchd never rotates these logs.
 
+## Phase 4: web viewer (done)
+
+The deck is not always plugged in, but the status is still worth seeing. Since
+everything up to `fillKeyBuffer` was already hardware-independent, this was a
+refactor plus a transport rather than a second renderer.
+
+`Display` split into a `Sink` interface and two implementations: `DeckSink`
+(the USB handle, hotplug and key presses, unchanged) and `WebSink`. `main.ts`
+now builds one `Frame` — slots, tiles, dropped — and fans it out. Building it
+once is the point: the viewer cannot drift from the deck, because it is being
+handed the same tiles, including overflow and pinned-but-dark keys.
+
+Two things had to change to make a deckless frame possible at all:
+
+- `show()` used to early-return when no deck was open, so with nothing attached
+  no layout or render happened.
+- `layout()` needs a key count, which only existed once a device was open. It
+  now falls back to `KEY_COUNT` (15).
+
+Decisions worth recording:
+
+- **Tiles are content-addressed by `slotKey()`**, the existing render cache key.
+  Same key means same pixels, so tile URLs are `immutable` and the browser
+  refetches nothing. Reusing the cache key rather than inventing a second
+  identity means the two cannot fall out of step.
+- **SSE, not WebSockets.** Traffic is one-way and low-rate, and EventSource
+  reconnects by itself, so a daemon restart recovers with no client logic.
+- **PNG at 1x**, upscaled by the browser with `image-rendering: pixelated`.
+  Same transform as scaling server-side, a ninth of the bytes.
+- **Loopback only, no auth.** A press focuses windows and the page leaks repo
+  and session names. Binding 127.0.0.1 is the whole security model, so this must
+  never be exposed.
+- **A failed bind is not fatal.** EADDRINUSE (usually the launch agent already
+  running) logs and disables the viewer; the deck carries on.
+- **Presses share one path.** The browser POSTs `/press/N` into the same handler
+  as `onKeyUp`, including the `jumping` guard, so a click and a physical press
+  cannot race into overlapping AppleScript.
+
+Verified end to end with no deck attached: live agents streamed over SSE, tiles
+served as real 72x72 PNGs matching the deck design, and a browser click logged
+`jumped to sd-connect (zephyr/w5:p1)` — press-to-jump with no hardware.
+
 ## Multiple machines
 
 Supported for identical models. The daemon opens whichever deck is present
@@ -242,6 +285,7 @@ the opened device.
 
 ## Out of scope
 
+Remote (non-loopback) access to the web viewer, and any authentication for it.
 Multi-page navigation, non-herdr data sources, Stream Deck models other than
 MK.2, and any press action other than focus (prompting, sending keys) — the API
 supports them, but they are not wired up.

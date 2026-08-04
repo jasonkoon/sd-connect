@@ -14,6 +14,24 @@ import type { Slot } from '../types.ts'
 import { DEFAULT_THEME, type Theme } from './theme.ts'
 import { fitText } from './text.ts'
 
+/**
+ * Identity of a slot's pixels: two slots with the same key always render the
+ * same tile. Used as the render cache key, and by the web viewer as a
+ * content-addressed URL so the browser can cache each tile immutably.
+ */
+export function slotKey(slot: Slot): string {
+  switch (slot.kind) {
+    case 'empty':
+      return slot.pinned ? 'pinned-empty' : 'empty'
+    case 'overflow':
+      return `overflow:${slot.count}`
+    case 'agent': {
+      const a = slot.agent
+      return `agent:${a.status}:${a.repo}:${a.session}`
+    }
+  }
+}
+
 /** Horizontal padding, so glyphs never touch the bezel. */
 const PADDING = 2
 const MAX_TEXT_WIDTH = ICON_SIZE - PADDING * 2
@@ -57,22 +75,8 @@ export class TileRenderer {
     return { hits: this.#hits, misses: this.#misses, size: this.#cache.size }
   }
 
-  /** Cache key covering every input that can change the pixels. */
-  #keyFor(slot: Slot): string {
-    switch (slot.kind) {
-      case 'empty':
-        return slot.pinned ? 'pinned-empty' : 'empty'
-      case 'overflow':
-        return `overflow:${slot.count}`
-      case 'agent': {
-        const a = slot.agent
-        return `agent:${a.status}:${a.repo}:${a.session}`
-      }
-    }
-  }
-
   render(slot: Slot): Buffer {
-    const cacheKey = this.#keyFor(slot)
+    const cacheKey = slotKey(slot)
 
     const cached = this.#cache.get(cacheKey)
     if (cached) {

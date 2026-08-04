@@ -14,9 +14,17 @@ import { AGENT_STATUSES, type AgentStatus } from './types.ts'
 import type { Pin } from './layout.ts'
 import { DEFAULT_THEME, type Theme } from './render/theme.ts'
 
+/** The localhost viewer, for when the deck is not plugged in. */
+export interface WebConfig {
+  enabled: boolean
+  /** Loopback only; never bound to a routable address. */
+  port: number
+}
+
 export interface Config {
   brightness: number
   pollIntervalMs: number
+  web: WebConfig
   /**
    * Raise the terminal window on a key press. Needs Accessibility permission
    * and a terminal whose window titles mention the herdr session name. Turn it
@@ -27,10 +35,35 @@ export interface Config {
   theme: Theme
 }
 
+/**
+ * Lowest port not needing root, and the highest legal one. Ports below 1024
+ * are unusable here because this never runs privileged.
+ */
+export const MIN_PORT = 1024
+export const MAX_PORT = 65535
+
+/** The one definition of the default port. Re-exported by the web sink. */
+export const DEFAULT_PORT = 8787
+
+export function isValidPort(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_PORT &&
+    value <= MAX_PORT
+  )
+}
+
+export const DEFAULT_WEB_CONFIG: WebConfig = {
+  enabled: true,
+  port: DEFAULT_PORT,
+}
+
 export const DEFAULT_CONFIG: Config = {
   brightness: 70,
   pollIntervalMs: 400,
   raiseWindow: true,
+  web: DEFAULT_WEB_CONFIG,
   pins: [],
   theme: DEFAULT_THEME,
 }
@@ -68,6 +101,7 @@ export function parseConfig(text: string): ParseResult {
 
   const config: Config = {
     ...DEFAULT_CONFIG,
+    web: { ...DEFAULT_WEB_CONFIG },
     pins: [],
     theme: { ...DEFAULT_THEME, statusColors: { ...DEFAULT_THEME.statusColors } },
   }
@@ -96,6 +130,28 @@ export function parseConfig(text: string): ParseResult {
       warnings.push(`raise_window must be true or false, got ${JSON.stringify(raw.raise_window)}`)
     } else {
       config.raiseWindow = raw.raise_window
+    }
+  }
+
+  const web = asRecord(raw.web)
+  if (raw.web !== undefined && !web) {
+    warnings.push('[web] must be a table')
+  } else if (web) {
+    if (web.enabled !== undefined) {
+      if (typeof web.enabled !== 'boolean') {
+        warnings.push(`web.enabled must be true or false, got ${JSON.stringify(web.enabled)}`)
+      } else {
+        config.web.enabled = web.enabled
+      }
+    }
+    if (web.port !== undefined) {
+      if (!isValidPort(web.port)) {
+        warnings.push(
+          `web.port must be an integer ${MIN_PORT}-${MAX_PORT}, got ${JSON.stringify(web.port)}`,
+        )
+      } else {
+        config.web.port = web.port
+      }
     }
   }
 

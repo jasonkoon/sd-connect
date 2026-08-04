@@ -4,220 +4,158 @@
  *   npm start
  *   npm start -- --once     paint one frame and exit
  *   npm start -- --verbose  log every frame
+ *   npm start -- --no-web   disable the web viewer
+ *   npm start -- --port N   serve the web viewer on N
  *
- * Data flows one way: poller -> layout -> renderer -> deck. Nothing here talks
- * back to herdr, which is what keeps phase 1 honest about being display-only.
+ * Data flows one way: poller -> layout -> renderer -> sinks. Nothing here talks
+ * back to herdr except key presses, which only focus a window.
+ *
+ * A frame is built once and fanned out, so the web viewer is guaranteed to be
+ * showing exactly what the deck is showing, including overflow and pinned keys.
  */
 
-import { loadConfig } from './config.ts'
-import { Deck, DeckUnavailableError, deckPresent, openDeck } from './deck.ts'
+import { isValidPort, loadConfig, MAX_PORT, MIN_PORT } from './config.ts'
+import { KEY_COUNT } from './deck.ts'
 import { focusAgent } from './focus.ts'
+import type { Frame, Sink } from './frame.ts'
 import { AgentPoller } from './herdr/poller.ts'
 import { layout } from './layout.ts'
 import { TileRenderer } from './render/tile.ts'
 import { installShutdownHandlers, onShutdown, shutdown } from './shutdown.ts'
-import type { Agent, Slot } from './types.ts'
-
-const RECONNECT_DELAY_MS = 2000
+import { DeckSink } from './sinks/deck-sink.ts'
+import { WebSink } from './sinks/web/server.ts'
+import type { Agent } from './types.ts'
 
 interface Flags {
   once: boolean
   verbose: boolean
+  web: boolean
+  /** Overrides config when set. Null means "use config". */
+  port: number | null
+  /** Problems with the arguments. Reported, then ignored. */
+  warnings: string[]
 }
 
 function parseFlags(argv: string[]): Flags {
+  const warnings: string[] = []
+  const portIndex = argv.indexOf('--port')
+
+  let port: number | null = null
+  if (portIndex !== -1) {
+    const raw = argv[portIndex + 1]
+    const parsed = Number(raw)
+    // A silently discarded --port is worse than a rejected one: you would be
+    // left looking for the viewer on a port it was never told to use.
+    if (raw === undefined || raw.startsWith('--')) {
+      warnings.push('--port needs a value; using the configured port')
+    } else if (!isValidPort(parsed)) {
+      warnings.push(
+        `--port must be an integer ${MIN_PORT}-${MAX_PORT}, got '${raw}'; using the configured port`,
+      )
+    } else {
+      port = parsed
+    }
+  }
+
   return {
     once: argv.includes('--once'),
     verbose: argv.includes('--verbose') || argv.includes('-v'),
-  }
-}
-
-function describe(slots: readonly Slot[]): string {
-  return slots
-    .map((slot, i) => {
-      if (slot.kind === 'empty') return null
-      if (slot.kind === 'overflow') return `${i}:+${slot.count}`
-      return `${i}:${slot.agent.repo}(${slot.agent.status})`
-    })
-    .filter((s): s is string => s !== null)
-    .join(' ')
-}
-
-/**
- * Owns the deck handle and repaints on demand.
- *
- * Hotplug is handled here rather than in Deck: if a write fails, the device is
- * assumed gone, and we poll for its return. The last frame is retained so the
- * deck can be repainted immediately on reconnect without waiting for the next
- * herdr change.
- */
-class Display {
-  #deck: Deck | null = null
-  #renderer: TileRenderer
-  #brightness: number
-  #lastAgents: Agent[] = []
-  #pins
-  #verbose: boolean
-  #reconnecting = false
-  #stopped = false
-  /** What is on each key right now, so a press can be resolved to an agent. */
-  #currentSlots: Slot[] = []
-  #onPress: ((agent: Agent) => void) | null = null
-
-  constructor(opts: {
-    renderer: TileRenderer
-    brightness: number
-    pins: Parameters<typeof layout>[1]['pins']
-    verbose: boolean
-  }) {
-    this.#renderer = opts.renderer
-    this.#brightness = opts.brightness
-    this.#pins = opts.pins
-    this.#verbose = opts.verbose
-  }
-
-  /** Register the handler invoked when a key showing an agent is pressed. */
-  onPress(handler: (agent: Agent) => void): void {
-    this.#onPress = handler
-  }
-
-  /** The agent displayed on a key, or null for empty and overflow keys. */
-  agentAt(index: number): Agent | null {
-    const slot = this.#currentSlots[index]
-    return slot?.kind === 'agent' ? slot.agent : null
-  }
-
-  get connected(): boolean {
-    return this.#deck !== null
-  }
-
-  async connect(): Promise<boolean> {
-    try {
-      const deck = await openDeck({ brightness: this.#brightness })
-      // node-hid emits 'error' from its read loop when the deck is unplugged.
-      // An unhandled 'error' on an EventEmitter is a fatal exception, so this
-      // listener is what keeps an unplug survivable rather than terminal.
-      deck.onError((error) => {
-        console.error(`[sd-connect] deck error: ${error.message}`)
-        this.#handleDisconnect()
-      })
-      // Act on release rather than press: 'up' is what people expect from a
-      // button, and it avoids firing twice if a key is held.
-      deck.onKeyUp((index) => {
-        const agent = this.agentAt(index)
-        if (agent) this.#onPress?.(agent)
-      })
-      this.#deck = deck
-      console.log(`[sd-connect] deck connected: ${deck.device.MODEL}, ${deck.keyCount} keys`)
-      return true
-    } catch (error) {
-      if (error instanceof DeckUnavailableError) return false
-      throw error
-    }
-  }
-
-  /** Drop the handle and start watching for the device to return. */
-  #handleDisconnect(): void {
-    if (this.#deck === null) return
-    this.#deck = null
-    void this.#reconnectLoop()
-  }
-
-  /**
-   * Start watching for a deck that is not currently attached. Safe to call when
-   * one is already connected (it does nothing) or repeatedly (it is idempotent).
-   */
-  waitForDeck(): void {
-    if (this.#deck === null) void this.#reconnectLoop()
-  }
-
-  async show(agents: Agent[]): Promise<void> {
-    this.#lastAgents = agents
-    const deck = this.#deck
-    if (!deck) return
-
-    const { slots, dropped } = layout(agents, { keyCount: deck.keyCount, pins: this.#pins })
-    this.#currentSlots = slots
-    const tiles = slots.map((slot) => this.#renderer.render(slot))
-
-    try {
-      const written = await deck.setKeys(tiles)
-      // Per-frame logging is verbose-only. Under launchd this log is never
-      // rotated, and an agent flipping between working and idle all day would
-      // otherwise grow it forever. Presses and failures are always logged.
-      if (this.#verbose && written > 0) {
-        const extra = dropped.length > 0 ? ` (+${dropped.length} not shown)` : ''
-        console.log(`[sd-connect] ${written} key(s) updated: ${describe(slots)}${extra}`)
-      }
-    } catch (error) {
-      // A write failing almost always means the deck was unplugged.
-      console.error(`[sd-connect] deck write failed: ${error instanceof Error ? error.message : error}`)
-      this.#handleDisconnect()
-    }
-  }
-
-  /** Poll for the deck coming back, then repaint the frame we already have. */
-  async #reconnectLoop(): Promise<void> {
-    if (this.#reconnecting || this.#stopped) return
-    this.#reconnecting = true
-    console.log('[sd-connect] waiting for the deck to come back...')
-
-    while (!this.#stopped && this.#deck === null) {
-      await new Promise((r) => setTimeout(r, RECONNECT_DELAY_MS))
-      if (this.#stopped) break
-      if (!(await deckPresent())) continue
-      try {
-        if (await this.connect()) {
-          // A freshly opened Deck starts with no shadow state, so the next
-          // show() already repaints every key.
-          await this.show(this.#lastAgents)
-        }
-      } catch (error) {
-        console.error(`[sd-connect] reconnect failed: ${error instanceof Error ? error.message : error}`)
-      }
-    }
-    this.#reconnecting = false
-  }
-
-  async stop(): Promise<void> {
-    this.#stopped = true
-    await this.#deck?.shutdown()
-    this.#deck = null
+    web: !argv.includes('--no-web'),
+    port,
+    warnings,
   }
 }
 
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2))
   installShutdownHandlers()
+  for (const warning of flags.warnings) console.warn(`[sd-connect] ${warning}`)
 
   const { config, warnings, path, existed } = await loadConfig()
   console.log(`[sd-connect] config: ${existed ? path : `${path} (not found, using defaults)`}`)
   for (const warning of warnings) console.warn(`[sd-connect] config: ${warning}`)
   if (config.pins.length > 0) {
-    console.log(`[sd-connect] ${config.pins.length} pin(s): ${config.pins.map((p) => `key ${p.key} -> ${p.session}:${p.cwd}`).join(', ')}`)
+    console.log(
+      `[sd-connect] ${config.pins.length} pin(s): ${config.pins.map((p) => `key ${p.key} -> ${p.session}:${p.cwd}`).join(', ')}`,
+    )
   }
 
   const renderer = new TileRenderer(config.theme)
-  const display = new Display({
-    renderer,
-    brightness: config.brightness,
-    pins: config.pins,
-    verbose: flags.verbose,
-  })
-  onShutdown(() => display.stop())
 
-  if (!(await display.connect())) {
+  // Declared before the sinks because both press paths call it, and the poller
+  // it needs is created after them. Assigned once everything exists.
+  let press: (agent: Agent) => void = () => {}
+
+  const deckSink = new DeckSink({
+    brightness: config.brightness,
+    verbose: flags.verbose,
+    onPress: (agent) => press(agent),
+  })
+
+  const sinks: Sink[] = [deckSink]
+
+  // --once paints a frame and exits, so a viewer would be torn down before it
+  // could be opened. Skipping it also keeps --once's "no deck" exit code honest.
+  const webEnabled = flags.web && config.web.enabled && !flags.once
+  let webSink: WebSink | null = null
+  if (webEnabled) {
+    webSink = new WebSink({
+      // --port beats config, config beats the built-in default.
+      port: flags.port ?? config.web.port,
+      portSource: flags.port !== null ? '--port' : existed ? 'config' : 'default',
+      onPress: (agent) => press(agent),
+      verbose: flags.verbose,
+    })
+    // A viewer that cannot bind is not fatal; the deck still works without it.
+    if (await webSink.start()) sinks.push(webSink)
+    else webSink = null
+  }
+
+  for (const sink of sinks) onShutdown(() => sink.stop())
+
+  if (!(await deckSink.connect())) {
     if (flags.once) {
       console.error('[sd-connect] no Stream Deck found')
       await shutdown(2)
     }
     console.log('[sd-connect] no Stream Deck found; waiting for one to be plugged in')
-    display.waitForDeck()
+    deckSink.waitForDeck()
+  }
+
+  /**
+   * Lay out and render one frame, then hand it to every sink.
+   *
+   * Key count comes from the deck when one is attached, and falls back to the
+   * MK.2's 15 otherwise — without that fallback there would be nothing to show
+   * in the viewer while unplugged, which is the whole point of having it.
+   */
+  const show = async (agents: Agent[]): Promise<void> => {
+    const keyCount = deckSink.keyCount ?? KEY_COUNT
+    const { slots, dropped } = layout(agents, { keyCount, pins: config.pins })
+    const frame: Frame = {
+      slots,
+      tiles: slots.map((slot) => renderer.render(slot)),
+      dropped,
+      keyCount,
+    }
+    // A sink that throws must not stop the others. Each already absorbs its own
+    // transient failures, so anything reaching here is a bug worth logging.
+    await Promise.all(
+      sinks.map(async (sink) => {
+        try {
+          await sink.present(frame)
+        } catch (error) {
+          console.error(
+            `[sd-connect] sink '${sink.name}' failed: ${error instanceof Error ? error.message : error}`,
+          )
+        }
+      }),
+    )
   }
 
   const poller = new AgentPoller({
     intervalMs: config.pollIntervalMs,
-    onChange: (agents) => display.show(agents),
+    onChange: show,
     onSessionError: (session, error) => {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[sd-connect] session '${session}' unavailable: ${message}`)
@@ -228,7 +166,7 @@ async function main(): Promise<void> {
   // A press jumps to that agent. Guarded so a burst of presses cannot pile up
   // overlapping AppleScript calls, which are the slow part (~140ms).
   let jumping = false
-  display.onPress((agent) => {
+  press = (agent: Agent) => {
     if (jumping) return
     jumping = true
     void (async () => {
@@ -253,7 +191,7 @@ async function main(): Promise<void> {
         jumping = false
       }
     })()
-  })
+  }
 
   await poller.start()
   console.log(`[sd-connect] polling ${poller.sessions.length} session(s) every ${config.pollIntervalMs}ms`)

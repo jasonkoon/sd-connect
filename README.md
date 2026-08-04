@@ -7,6 +7,10 @@ Each key shows one agent as a status colour bar plus its repo and session name.
 Pressing a key jumps to that agent: it raises the terminal window for that herdr
 session and focuses the right workspace, tab and pane.
 
+The same display is also served at <http://127.0.0.1:8787> (configurable) for
+when the deck is not plugged in — same keys, same pixels, and clicking one jumps
+just like pressing it does.
+
 See [PLAN.md](./PLAN.md) for the full design and build order.
 
 ## Requirements
@@ -132,6 +136,13 @@ poll_interval_ms = 400
 # permission. Set to false to keep presses purely inside herdr.
 raise_window = true
 
+# The localhost viewer, for when the deck is not plugged in.
+# Loopback only, no auth — do not expose this to the network.
+# port: 1024-65535, overridden by --port. Default 8787.
+[web]
+enabled = true
+port    = 8787
+
 [colors]
 idle    = "#22c55e"
 working = "#3b82f6"
@@ -229,7 +240,67 @@ launch agent), `1` an assertion failed.
 npm start                # daemon: poll herdr, paint the deck, Ctrl-C to stop
 npm start -- --once      # paint one frame and exit
 npm start -- --verbose   # also log every repaint
+npm start -- --no-web    # deck only, no web viewer
+npm start -- --port 9000 # serve the viewer somewhere else
 ```
+
+## The web viewer
+
+Open <http://127.0.0.1:8787>. It shows the same 5x3 grid the deck shows and
+updates as herdr changes. Clicking a key jumps to that agent exactly as pressing
+it would.
+
+### Which port
+
+8787 is only the default. The port is chosen from, highest priority first:
+
+| Source | Example | Notes |
+| --- | --- | --- |
+| `--port` | `npm start -- --port 9000` | Wins over everything. Handy for a one-off. |
+| `web.port` in config | `port = 9000` under `[web]` | The persistent choice. |
+| Built-in default | `8787` | Used when neither is set. |
+
+Must be an integer from 1024 to 65535 — below 1024 needs root, which this never
+runs as. An invalid value in either place is warned about and ignored rather
+than being fatal, so a typo cannot stop the deck working.
+
+The startup log always names the source, so you never have to guess:
+
+```
+[sd-connect] web viewer on http://127.0.0.1:9000 (port from --port)
+```
+
+Under launchd, `--port` is not in play, so it is whatever config says:
+
+```sh
+grep -A2 '\[web\]' ~/.config/sd-connect/config.toml
+grep 'web viewer' ~/Library/Logs/sd-connect/sd-connect.log | tail -1
+```
+
+This is the answer to "the deck is not plugged in right now". The daemon builds
+one frame and fans it out, so the viewer is showing the actual frame — including
+overflow and pinned-but-dark keys — rather than a second opinion about what the
+deck might look like. With no deck attached, layout falls back to the MK.2's 15
+keys so there is still something to look at.
+
+It is served on loopback only. There is no authentication, a click focuses
+windows, and repo and session names are visible, so it must not be exposed to
+the network. Do not port-forward it.
+
+Turn it off with `--no-web`, or permanently:
+
+```toml
+[web]
+enabled = false
+port    = 8787
+```
+
+If the port is already taken the viewer logs that and disables itself; the deck
+carries on working. That is the usual sign the launch agent is already running.
+
+Because it needs no hardware, it is also the easiest way to check the herdr side
+is healthy: `npm start -- --no-web` plus `npm run watch` covers the text case,
+and the viewer covers the visual one.
 
 ## The launch agent
 
@@ -264,6 +335,9 @@ it connects within about two seconds and paints the current state. Verified by
 starting with the deck unplugged and then plugging it in. So a laptop that moves
 between a deck at home and a deck at work needs no intervention: log in without
 one, plug in whichever is there, and it picks it up.
+
+Meanwhile the [web viewer](#the-web-viewer) still shows everything and presses
+still work, so an unplugged deck costs you the hardware, not the tool.
 
 **Different models would need work.** Key count already adapts, but tile
 rendering hardcodes 72x72. An XL (8x4 at 96px) or Mini (3x2 at 80px) would throw
@@ -350,17 +424,26 @@ src/
     poller.ts       poll agent.list, emit only real changes
     watch.ts        headless view of the merged model
     herdr.test.ts   protocol, discovery and polling, vs a fake server
-  main.ts           the daemon: poller -> layout -> renderer -> deck
+  main.ts           the daemon: poller -> layout -> renderer -> sinks
+  frame.ts          a rendered frame, and the Sink interface
   config.ts         ~/.config/sd-connect/config.toml, validated
+  config.test.ts    config validation, notably [web]
   layout.ts         pins, auto-flow, overflow eviction
   focus.ts          key press -> raise window + herdr agent.focus
   focus.test.ts     focus behaviour and its failure modes
   layout.test.ts    layout and config
+  sinks/
+    deck-sink.ts    the deck: USB handle, hotplug, key presses
+    web/
+      server.ts     localhost viewer: PNG tiles, SSE push, click to jump
+      page.ts       the viewer page, inlined so launchd needs no asset path
+      server.test.ts HTTP surface, press routing, port conflicts
   expect.ts         tiny expect() shim over node:assert
   render/
     theme.ts        colours, fonts, bar height
     text.ts         measured fitting: shrink, wrap, then truncate
     tile.ts         Slot -> 72x72x3 RGB, with an LRU cache
+    png.ts          RGB -> PNG, nearest-neighbour (shared by dump and web)
     dump.ts         sample tiles as PNGs + contact sheet
     preview.ts      sample tiles on real hardware
     tile.test.ts    fit and cache behaviour
