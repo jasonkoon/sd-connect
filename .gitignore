@@ -6,6 +6,12 @@ dist/
 # Scratch output from the tile renderer's PNG dump mode
 /tmp-tiles/
 
+# Generated per machine by scripts/make-shortcut.sh. It embeds an absolute path
+# to viewer.sh and is signed, so a committed copy would be wrong everywhere
+# else — same reasoning as the launchd plist, which is a template for exactly
+# this reason.
+/shortcuts/
+
 # npm is the package manager here; package-lock.json IS committed, because this
 # is an application with native dependencies that should be pinned.
 bun.lock

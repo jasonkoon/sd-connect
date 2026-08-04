@@ -250,6 +250,43 @@ Open <http://127.0.0.1:8787>. It shows the same 5x3 grid the deck shows and
 updates as herdr changes. Clicking a key jumps to that agent exactly as pressing
 it would.
 
+### Hotkey
+
+`scripts/viewer.sh` opens the viewer as a standalone Chrome window — no tabs, no
+address bar — and toggles it: press once to summon, again to dismiss. Bound to a
+key, checking on your agents costs one keystroke each way.
+
+```sh
+./scripts/viewer.sh          # toggle
+./scripts/viewer.sh show     # always raise, never hide
+./scripts/viewer.sh --port N # override the port
+```
+
+It finds the port the same way the daemon does, reuses an existing window rather
+than piling up duplicates, and if nothing is listening it says so (exit 3) plus
+a notification, instead of opening a browser on a connection error.
+
+To bind it with macOS Shortcuts, which needs nothing installed:
+
+```sh
+./scripts/make-shortcut.sh                        # writes shortcuts/SD-Connect-Viewer.shortcut
+open shortcuts/SD-Connect-Viewer.shortcut         # click "Add Shortcut" to import
+```
+
+Then in Shortcuts select **SD-Connect-Viewer**, open the details pane (the `i`,
+top right) and set a **Keyboard Shortcut**. Something like `⌃⌥⌘D` is unlikely to
+clash. The first run asks permission to run a shell script; approve it once.
+
+Two things worth knowing. The shortcut stores an absolute path to `viewer.sh`,
+so rerun `make-shortcut.sh` if you move the checkout. And Shortcuts hotkeys have
+a noticeable lag — if that grates, Hammerspoon binds the same script instantly:
+
+```lua
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, "D", function()
+  hs.task.new(os.getenv("HOME") .. "/dev/koon/sd-connect/scripts/viewer.sh", nil):start()
+end)
+```
+
 ### Which port
 
 8787 is only the default. The port is chosen from, highest priority first:
@@ -413,6 +450,9 @@ connections stay open.
 ```
 launchd/            plist template for the login agent
 scripts/            install / uninstall the launch agent
+  viewer.sh         toggle the web viewer; bind this to a hotkey
+  make-shortcut.sh  build a signed macOS Shortcut wrapping viewer.sh
+shortcuts/          the generated .shortcut, ready to import
 src/
   types.ts          domain types, status priority, agent keys
   deck.ts           device lifecycle, diffed key writes
