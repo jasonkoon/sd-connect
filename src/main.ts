@@ -22,6 +22,7 @@ import { AgentPoller } from './herdr/poller.ts'
 import { layout } from './layout.ts'
 import { TileRenderer } from './render/tile.ts'
 import { installShutdownHandlers, onShutdown, shutdown } from './shutdown.ts'
+import { AmpGd6Sink } from './sinks/ampgd6-sink.ts'
 import { DeckSink } from './sinks/deck-sink.ts'
 import { WebSink } from './sinks/web/server.ts'
 import type { Agent } from './types.ts'
@@ -92,7 +93,18 @@ async function main(): Promise<void> {
     onPress: (agent) => press(agent),
   })
 
-  const sinks: Sink[] = [deckSink]
+  // Both hardware sinks are always present; each is a no-op until its own
+  // device is actually plugged in. That is the whole auto-detect story: there
+  // is no branching on "which model do I have", just "try to connect both,
+  // whichever succeeds writes real pixels". Safe to run together because only
+  // one physical device can claim a given VID/PID pair anyway.
+  const ampgd6Sink = new AmpGd6Sink({
+    brightness: config.brightness,
+    verbose: flags.verbose,
+    onPress: (agent) => press(agent),
+  })
+
+  const sinks: Sink[] = [deckSink, ampgd6Sink]
 
   // --once paints a frame and exits, so a viewer would be torn down before it
   // could be opened. Skipping it also keeps --once's "no deck" exit code honest.
@@ -113,13 +125,24 @@ async function main(): Promise<void> {
 
   for (const sink of sinks) onShutdown(() => sink.stop())
 
-  if (!(await deckSink.connect())) {
+  // Stream Deck first, Ampligame D6 second: an arbitrary but stable
+  // tie-break for the (rare) case both are plugged in at once.
+  const deckConnected = await deckSink.connect()
+  const ampgd6Connected = await ampgd6Sink.connect()
+
+  if (!deckConnected && !ampgd6Connected) {
     if (flags.once) {
-      console.error('[sd-connect] no Stream Deck found')
+      console.error('[sd-connect] no Stream Deck or Ampligame D6 found')
       await shutdown(2)
     }
-    console.log('[sd-connect] no Stream Deck found; waiting for one to be plugged in')
+    console.log('[sd-connect] no deck found; waiting for one to be plugged in')
     deckSink.waitForDeck()
+    ampgd6Sink.waitForDevice()
+  } else if (!flags.once) {
+    // The one that didn't connect still watches for its own hotplug, so
+    // swapping devices later (or plugging in a second one) just works.
+    if (!deckConnected) deckSink.waitForDeck()
+    if (!ampgd6Connected) ampgd6Sink.waitForDevice()
   }
 
   /**
@@ -130,7 +153,7 @@ async function main(): Promise<void> {
    * in the viewer while unplugged, which is the whole point of having it.
    */
   const show = async (agents: Agent[]): Promise<void> => {
-    const keyCount = deckSink.keyCount ?? KEY_COUNT
+    const keyCount = deckSink.keyCount ?? ampgd6Sink.keyCount ?? KEY_COUNT
     const { slots, dropped } = layout(agents, { keyCount, pins: config.pins })
     const frame: Frame = {
       slots,

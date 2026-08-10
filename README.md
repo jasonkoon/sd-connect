@@ -1,7 +1,8 @@
 # sd-connect
 
-Drive an Elgato Stream Deck MK.2 directly — no Elgato software — to show the live
-status of every agent across all [herdr](https://github.com/) sessions.
+Drive an Elgato Stream Deck MK.2, or a Fifine Ampligame D6, directly — no
+vendor software — to show the live status of every agent across all
+[herdr](https://github.com/) sessions.
 
 Each key shows one agent as a status colour bar plus its repo and session name.
 Pressing a key jumps to that agent: it raises the terminal window for that herdr
@@ -15,9 +16,10 @@ See [PLAN.md](./PLAN.md) for the full design and build order.
 
 ## Requirements
 
-- macOS with a Stream Deck MK.2
+- macOS with a Stream Deck MK.2, a Fifine Ampligame D6, or both
 - [Node](https://nodejs.org) **23.6+**, installed via Homebrew (see step 1)
 - The Elgato Stream Deck app **not** running — it claims the USB device exclusively
+  (the D6 has no equivalent official Mac app to worry about)
 
 Node 23.6 is a hard floor: the scripts run `.ts` files directly and rely on
 unflagged type stripping. Node 22.x fails with
@@ -366,24 +368,78 @@ from `launchd/*.plist.template` with that machine's project and node paths, and
 `~/.config/sd-connect/config.toml` lives outside the repo, so pins can differ
 per machine (home and work rarely have the same repos checked out).
 
-**No deck attached is fine.** The daemon starts, logs `no Stream Deck found;
-waiting for one to be plugged in`, and keeps polling herdr. When a deck appears
-it connects within about two seconds and paints the current state. Verified by
-starting with the deck unplugged and then plugging it in. So a laptop that moves
+**No deck attached is fine.** The daemon starts, logs `no deck found; waiting
+for one to be plugged in`, and keeps polling herdr. When a deck appears it
+connects within about two seconds and paints the current state. Verified by
+starting with nothing attached and then plugging one in. So a laptop that moves
 between a deck at home and a deck at work needs no intervention: log in without
 one, plug in whichever is there, and it picks it up.
 
 Meanwhile the [web viewer](#the-web-viewer) still shows everything and presses
 still work, so an unplugged deck costs you the hardware, not the tool.
 
-**Different models would need work.** Key count already adapts, but tile
-rendering hardcodes 72x72. An XL (8x4 at 96px) or Mini (3x2 at 80px) would throw
-a RangeError on every write. Making `ICON_SIZE` come from the opened device is
-the fix if that ever matters.
+**A Stream Deck MK.2 and a D6 can both be plugged in at once.** Both are
+always watched; whichever is present writes real pixels, and the daemon paints
+both if both are there. There is no config to choose one — see
+[Fifine Ampligame D6 support](#fifine-ampligame-d6-support) for why that is
+safe.
+
+**Different Stream Deck models would need work.** Key count already adapts,
+but tile rendering hardcodes 72x72. An XL (8x4 at 96px) or Mini (3x2 at 80px)
+would throw a RangeError on every write. Making `ICON_SIZE` come from the
+opened device is the fix if that ever matters.
 
 **If you reinstall the Elgato Stream Deck software**, disable its launch agent
 (`~/Library/LaunchAgents/com.elgato.StreamDeck.plist`). It claims the USB device
-exclusively at login and sd-connect will not be able to open the deck.
+exclusively at login and sd-connect will not be able to open the deck. The D6
+has no equivalent official Mac software to worry about.
+
+## Fifine Ampligame D6 support
+
+The D6 looks like a Stream Deck MK.2 clone — same 5x3 grid of LCD keys — but it
+is not one at Elgato's protocol level. It is Mirabox/Ajazz reference-design
+hardware (the informally-named "mirajazz" protocol), talked to directly over
+raw HID in `src/ampgd6.ts`, entirely independent of `@elgato-stream-deck/node`.
+
+Everything below was confirmed against real hardware, not assumed from
+documentation — see `src/ampgd6.ts`'s header for the full account, and
+`tools/mirajazz-probe.cjs` / `tools/mirajazz-grid-probe.cjs` for the throwaway
+scripts that did it.
+
+**The USB ID that actually matters: `3142:0060`.** The two prior open-source
+implementations of this device — Phoenix557/FifineOpenSource and
+3dRikal/opendeck-ampgd6 — both target PID `0x0007` and, on seeing `0x0060` go
+completely silent under their protocol, concluded it must be unactivated "demo"
+firmware that needs Fifine's official Windows/Mac app run once to unlock. That
+theory is wrong for this hardware. The real cause: `0x0060` is protocol
+**v2** (1024-byte HID packets), not v1 (512 bytes), and every command sent at
+the wrong packet size is silently ignored by the firmware rather than
+rejected. The fix came from an open, unmerged PR — opendeck-ampgd6#1 — which we
+found and confirmed live. No official software install, activation step, or
+waiting is required; it works from a cold boot.
+
+**Images are 95x95 JPEG, rotated 180 degrees, on a different key index than
+they report presses on.** sd-connect's renderer produces 72x72 RGB for every
+other sink, so `ampgd6.ts` resizes and rotates internally — callers never need
+to know this is different hardware. Two independent asymmetries, both
+confirmed with an asymmetric test tile (a symmetric one would have hidden
+them):
+
+| | Image writes | Button presses |
+| --- | --- | --- |
+| Indexing | Remapped: visual key N → device index `[10,11,12,13,14,5,6,7,8,9,0,1,2,3,4][N]` | Not remapped: raw index in raster order, 1-based |
+| Orientation | Rot180 | n/a |
+
+**The daemon does not need to know which hardware you have.** Both the
+Stream Deck sink and the D6 sink are always started; each is a no-op until its
+own device shows up on USB, and each watches independently for its own
+hotplug/unplug. This was a deliberate choice over an explicit `[device] kind =`
+config setting — see `main.ts` for the reasoning.
+
+**Verified live, end to end:** brightness, button press/release events, image
+writes (batched, single flush), clear-all, disconnect detection on unplug
+(`hid_read_timeout`, caught rather than crashing), and reconnect-with-repaint
+on replug — all against real hardware, not simulated.
 
 ## Platform notes
 
@@ -455,7 +511,8 @@ scripts/            install / uninstall the launch agent
 shortcuts/          the generated .shortcut, ready to import
 src/
   types.ts          domain types, status priority, agent keys
-  deck.ts           device lifecycle, diffed key writes
+  deck.ts           Stream Deck device lifecycle, diffed key writes
+  ampgd6.ts         Fifine Ampligame D6 device lifecycle, raw HID protocol
   shutdown.ts       signal handling, cleanup with a watchdog
   smoke.ts          step 1 hardware verification
   herdr/
@@ -473,7 +530,8 @@ src/
   focus.test.ts     focus behaviour and its failure modes
   layout.test.ts    layout and config
   sinks/
-    deck-sink.ts    the deck: USB handle, hotplug, key presses
+    deck-sink.ts    the Stream Deck: USB handle, hotplug, key presses
+    ampgd6-sink.ts  the D6: USB handle, hotplug, key presses
     web/
       server.ts     localhost viewer: PNG tiles, SSE push, click to jump
       page.ts       the viewer page, inlined so launchd needs no asset path

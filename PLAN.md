@@ -271,6 +271,55 @@ Verified end to end with no deck attached: live agents streamed over SSE, tiles
 served as real 72x72 PNGs matching the deck design, and a browser click logged
 `jumped to sd-connect (zephyr/w5:p1)` — press-to-jump with no hardware.
 
+## Phase 5: Fifine Ampligame D6 support (done)
+
+A second hardware target, added after the fact rather than planned for: a D6
+(`3142:0060`) looks like a Stream Deck MK.2 but is Mirabox/Ajazz reference
+design hardware, not Elgato's. `src/ampgd6.ts` talks to it directly over raw
+HID with no library, alongside a new `AmpGd6Sink` with the same shape as
+`DeckSink`. `main.ts` starts both sinks unconditionally and lets whichever
+device is actually plugged in do the work — no `[device] kind` config, by
+deliberate choice, because either sink is a no-op without its own hardware.
+
+**The investigation took two sessions and a wrong turn.** First pass concluded
+the device was unactivated "demo" firmware, because commands sent to it at the
+512-byte v1 packet size were silently accepted by the OS but ignored by the
+firmware — no error, no effect, indistinguishable from "locked". That
+conclusion matched both published implementations for this model
+(Phoenix557/FifineOpenSource, 3dRikal/opendeck-ampgd6), which target PID
+`0x0007` and note the device may need Fifine's official app run once. Second
+session found an open, unmerged PR on opendeck-ampgd6 (#1) adding support for
+exactly this PID: it is protocol v2 (1024-byte packets), not v1. Confirmed
+live — brightness, button events, and images all started working the moment
+the packet size changed, with no activation step, from a cold boot.
+
+Lesson worth keeping: a device that accepts every write without error and
+does nothing is not necessarily locked. Framing (packet size, in this case)
+can be wrong in a way that looks identical to that from the write side.
+
+**Two independent, confirmed-on-hardware transforms, not one:**
+
+- Images: 95x95 JPEG, rotated 180 degrees, and remapped through
+  `[10,11,12,13,14,5,6,7,8,9,0,1,2,3,4]` — visual key N is not device index N.
+- Button presses: raw 1-based index in raster order, no remap at all. This
+  asymmetry (images remapped, presses not) was confirmed by pressing all 15
+  keys in a known order and reading the indexes back, and separately by
+  painting all 15 keys with their raw device index and reading the physical
+  grid. Assuming symmetry here would have silently swapped which key a press
+  jumps to.
+
+**Resize happens in the sink, not the renderer.** `TileRenderer` still only
+knows about 72x72 — the D6's 95x95 tiles are nearest-neighbour upscaled inside
+`ampgd6.ts` right before rotation and JPEG encoding. This was the deliberate
+trade-off over teaching the renderer a second tile size: a mild upscale for a
+glanceable status grid was judged not worth the wider change, but it is worth
+revisiting if D6 tiles ever look noticeably softer than the Stream Deck's.
+
+Verified live, end to end: brightness, batched image writes committed by a
+single flush, button press/release, clear-all, disconnect on unplug
+(`hid_read_timeout`, caught the same way as the Stream Deck's own error path),
+and reconnect-with-repaint on replug.
+
 ## Multiple machines
 
 Supported for identical models. The daemon opens whichever deck is present
