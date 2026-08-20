@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile)
 
 const TERMINAL_PROCESS = 'ghostty'
 const APPLESCRIPT_TIMEOUT_MS = 3000
+const OPEN_URL_TIMEOUT_MS = 3000
 const FOCUS_TIMEOUT_MS = 2000
 
 const RAISE_SCRIPT = `
@@ -43,6 +44,8 @@ on run argv
     end if
     if (count of warpProcs) = 0 then return "NOPROC"
     tell (item 1 of warpProcs)
+      -- A window's title reflects only its active tab, so this matches when
+      -- the target tab is already active somewhere.
       repeat with w in windows
         set t to value of attribute "AXTitle" of w
         if t contains targetRepo then
@@ -51,12 +54,14 @@ on run argv
           return "OK:" & t
         end if
       end repeat
-      if (count of windows) > 0 then
-        set w to item 1 of windows
-        perform action "AXRaise" of w
-        set frontmost to true
-        return "OK:" & (value of attribute "AXTitle" of w)
-      end if
+      -- Tab not visible: raise Warp anyway, but report that the tab was not
+      -- found. (Warp exposes no tabs via accessibility, so this script cannot
+      -- switch tabs — that path uses the warp://session deep link instead.)
+      if (count of windows) = 0 then return "NOWINDOW"
+      set w to item 1 of windows
+      perform action "AXRaise" of w
+      set frontmost to true
+      return "FALLBACK:" & (value of attribute "AXTitle" of w)
     end tell
   end tell
   return "NOWINDOW"
@@ -139,6 +144,21 @@ export async function raiseSessionWindow(
   }
 }
 
+/**
+ * Focus the exact Warp tab/pane via its warp://session/<uuid> deep link.
+ * This is the only mechanism Warp offers for selecting a specific tab:
+ * it has no AppleScript dictionary and exposes no tabs via accessibility.
+ */
+export async function openWarpFocusUrl(url: string): Promise<{ raised: boolean; note?: string }> {
+  try {
+    await execFileAsync('open', [url], { timeout: OPEN_URL_TIMEOUT_MS })
+    return { raised: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { raised: false, note: message.split('\n')[0] ?? message }
+  }
+}
+
 export async function raiseWarpWindow(
   repo: string,
   terminalProcess?: string,
@@ -151,6 +171,9 @@ export async function raiseWarpWindow(
     )
     const output = stdout.trim()
     if (output.startsWith('OK:')) return { raised: true }
+    if (output.startsWith('FALLBACK:')) {
+      return { raised: true, note: `no Warp tab titled like '${repo}'; raised Warp window instead` }
+    }
     if (output === 'NOPROC') return { raised: false, note: `no ${terminalProcess || 'Warp'} process` }
     if (output === 'NOWINDOW') return { raised: false, note: 'no Warp window found' }
     return { raised: false, note: `unexpected osascript output: ${output}` }
@@ -192,7 +215,11 @@ export async function focusAgent(
     let windowResult = { raised: false, note: 'window raising disabled' }
     if (shouldRaise) {
       if (agent.session === 'warp') {
-        windowResult = await raiseWarpWindow(agent.repo, options.terminalProcess)
+        // The deep link jumps to the exact tab; the AppleScript raise can
+        // only bring a Warp window forward, so it is the fallback.
+        windowResult = agent.focusUrl
+          ? await openWarpFocusUrl(agent.focusUrl)
+          : await raiseWarpWindow(agent.repo, options.terminalProcess)
       } else {
         windowResult = await raiseTerminalWindow(agent.repo, options.terminalProcess)
       }

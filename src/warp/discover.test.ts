@@ -12,6 +12,7 @@ import {
   parseClaudeSessionStatus,
   parseLsofCwdOutput,
   parsePiSessionStatus,
+  parseWarpFocusUrls,
   parsePsOutput,
   sessionSafePath,
   WarpAgentScanner,
@@ -289,7 +290,11 @@ describe('WarpAgentScanner', () => {
 fcwd
 n/Users/test/dev/git-agent
 `
+    const psEnvOutput = ` 5555 pi PWD=/Users/test/dev/git-agent WARP_FOCUS_URL=warp://session/aaaa1111 TERM=xterm-256color
+ 6666 claude WARP_FOCUS_URL=warp://session/bbbb2222 TERM=xterm-256color
+`
     const mockExec = async (file: string, args: string[]) => {
+      if (file === 'ps' && args[0] === '-Eww') return { stdout: psEnvOutput, stderr: '' }
       if (file === 'ps') return { stdout: psOutput, stderr: '' }
       if (file === 'lsof') return { stdout: lsofOutput, stderr: '' }
       if (file === 'lsappinfo') return { stdout: '"CFBundleIdentifier"="dev.warp.Warp-Stable"', stderr: '' }
@@ -313,6 +318,7 @@ n/Users/test/dev/git-agent
       repo: 'git-agent',
       agent: 'pi',
       focused: true,
+      focusUrl: 'warp://session/aaaa1111',
     })
     expect(agents[1]).toEqual({
       session: 'warp',
@@ -323,6 +329,19 @@ n/Users/test/dev/git-agent
       repo: 'claude-repo',
       agent: 'claude',
       focused: true,
+      focusUrl: 'warp://session/bbbb2222',
     })
+  })
+})
+
+describe('parseWarpFocusUrls', () => {
+  test('maps pids to their WARP_FOCUS_URL', () => {
+    const out = ` 5555 pi PWD=/x WARP_FOCUS_URL=warp://session/abc123 TERM=xterm
+ 6666 claude TERM=xterm
+not a ps line
+`
+    const urls = parseWarpFocusUrls(out)
+    expect(urls.get(5555)).toBe('warp://session/abc123')
+    expect(urls.has(6666)).toBe(false)
   })
 })

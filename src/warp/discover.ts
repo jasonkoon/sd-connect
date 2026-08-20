@@ -139,6 +139,24 @@ export function findWarpPiProcesses(procs: readonly RawProcess[]): RawProcess[] 
     .map((m) => m.proc)
 }
 
+/**
+ * Parse `ps -Eww -o pid=,command=` output into pid -> warp://session/... URL.
+ *
+ * -E appends each process's exec-time environment to its command line, and
+ * Warp exports WARP_FOCUS_URL into every tab shell, so any agent launched from
+ * a Warp tab carries the deep link that focuses that exact tab.
+ */
+export function parseWarpFocusUrls(stdout: string): Map<number, string> {
+  const result = new Map<number, string>()
+  for (const line of stdout.split('\n')) {
+    const pidMatch = line.match(/^\s*(\d+)\s/)
+    if (!pidMatch) continue
+    const urlMatch = line.match(/\bWARP_FOCUS_URL=(warp:\/\/\S+)/)
+    if (urlMatch) result.set(Number(pidMatch[1]), urlMatch[1]!)
+  }
+  return result
+}
+
 export function parseLsofCwdOutput(stdout: string): Map<number, string> {
   const result = new Map<number, string>()
   const lines = stdout.split('\n')
@@ -287,6 +305,9 @@ export function parsePiSessionStatus(cwd: string, sessionsBaseDir = defaultPiSes
 
 export class WarpAgentScanner {
   #cwdCache = new Map<number, string>()
+  // null = looked up and absent (agent not launched from a Warp tab), so we
+  // don't re-run ps for it every scan.
+  #focusUrlCache = new Map<number, string | null>()
   #sessionsBaseDir: string
   #claudeBaseDir: string
   #exec: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
@@ -316,6 +337,30 @@ export class WarpAgentScanner {
     const activePids = new Set(matches.map((m) => m.proc.pid))
     for (const pid of this.#cwdCache.keys()) {
       if (!activePids.has(pid)) this.#cwdCache.delete(pid)
+    }
+    for (const pid of this.#focusUrlCache.keys()) {
+      if (!activePids.has(pid)) this.#focusUrlCache.delete(pid)
+    }
+
+    const focusUrlPids = matches
+      .filter((m) => m.session === 'warp' && !this.#focusUrlCache.has(m.proc.pid))
+      .map((m) => m.proc.pid)
+    if (focusUrlPids.length > 0) {
+      let found = new Map<number, string>()
+      try {
+        const { stdout } = await this.#exec('ps', [
+          '-Eww',
+          '-o',
+          'pid=,command=',
+          '-p',
+          focusUrlPids.join(','),
+        ])
+        found = parseWarpFocusUrls(stdout)
+      } catch {
+      }
+      for (const pid of focusUrlPids) {
+        this.#focusUrlCache.set(pid, found.get(pid) ?? null)
+      }
     }
 
     for (const match of matches) {
@@ -373,6 +418,7 @@ export class WarpAgentScanner {
         repo: repoLabel(cwd),
         agent: match.agentKind,
         focused: match.session === 'warp' ? isWarpFocused : false,
+        focusUrl: this.#focusUrlCache.get(proc.pid) ?? undefined,
       })
     }
 

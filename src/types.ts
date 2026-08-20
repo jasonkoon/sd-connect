@@ -47,6 +47,13 @@ export interface Agent {
   /** Agent program name, e.g. "pi". Not rendered in phase 1, kept for later. */
   agent: string | null
   focused: boolean
+  /**
+   * Deep link that focuses the agent's exact Warp tab/pane, e.g.
+   * "warp://session/<uuid>". Warp exports it as WARP_FOCUS_URL into every
+   * shell, so agents started inside a Warp tab carry it in their process
+   * environment. Only set for Warp-hosted agents.
+   */
+  focusUrl?: string
 }
 
 /**
