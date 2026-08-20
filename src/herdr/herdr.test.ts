@@ -204,7 +204,7 @@ describe('AgentPoller', () => {
       join(dir, 'alpha', 'herdr.sock'),
     )
 
-    const poller = new AgentPoller({ sessionsDir: dir, onChange: () => {} })
+    const poller = new AgentPoller({ sessionsDir: dir, onChange: () => {}, includeWarp: false })
     await poller.start()
     poller.stop()
 
@@ -224,7 +224,7 @@ describe('AgentPoller', () => {
       }),
       join(dir, 'one', 'herdr.sock'),
     )
-    const poller = new AgentPoller({ sessionsDir: dir, onChange: () => {} })
+    const poller = new AgentPoller({ sessionsDir: dir, onChange: () => {}, includeWarp: false })
     await poller.start()
     poller.stop()
     const agents = await poller.pollOnce()
@@ -241,6 +241,7 @@ describe('AgentPoller', () => {
       sessionsDir: dir,
       onChange: () => {},
       onSessionError: (s) => errors.push(s),
+      includeWarp: false,
     })
     await poller.start()
     poller.stop()
@@ -267,6 +268,7 @@ describe('AgentPoller', () => {
     const poller = new AgentPoller({
       sessionsDir: dir,
       intervalMs: 20,
+      includeWarp: false,
       onChange: (agents) => {
         frames.push(agents)
       },
@@ -294,7 +296,7 @@ describe('AgentPoller', () => {
       return { agents: [] }
     }, join(dir, 'one', 'herdr.sock'))
 
-    const poller = new AgentPoller({ sessionsDir: dir, intervalMs: 10, onChange: () => {} })
+    const poller = new AgentPoller({ sessionsDir: dir, intervalMs: 10, onChange: () => {}, includeWarp: false })
     await poller.start()
     await new Promise((r) => setTimeout(r, 60))
     poller.stop()
@@ -313,6 +315,7 @@ describe('AgentPoller', () => {
     const frames: Agent[][] = []
     const poller = new AgentPoller({
       sessionsDir: dir,
+      includeWarp: false,
       onChange: (a) => {
         frames.push(a)
       },
@@ -320,5 +323,41 @@ describe('AgentPoller', () => {
     await poller.start()
     poller.stop()
     expect(frames).toEqual([[]])
+  })
+
+  test('merges warp agents alongside herdr sessions', async () => {
+    const dir = await tempDir()
+    await mkdir(join(dir, 'zephyr'), { recursive: true })
+    await fakeServer(
+      () => ({ agents: [rawAgent({ pane_id: 'w1:p1', workspace_id: 'w1', cwd: '/dev/zephyr' })] }),
+      join(dir, 'zephyr', 'herdr.sock'),
+    )
+
+    const mockWarpScanner = {
+      scan: async () => [
+        {
+          session: 'warp',
+          paneId: '12345',
+          workspaceId: 'warp',
+          status: 'idle' as const,
+          cwd: '/dev/git-agent',
+          repo: 'git-agent',
+          agent: 'pi',
+          focused: false,
+        },
+      ],
+    }
+
+    const poller = new AgentPoller({
+      sessionsDir: dir,
+      warpScanner: mockWarpScanner,
+      onChange: () => {},
+    })
+    await poller.start()
+    poller.stop()
+
+    const agents = await poller.pollOnce()
+    expect(agents).toHaveLength(2)
+    expect(agents.map((a) => `${a.session}/${a.repo}`)).toEqual(['warp/git-agent', 'zephyr/zephyr'])
   })
 })

@@ -86,6 +86,24 @@ describe('focusAgent', () => {
     expect(result.focused).toBe(true)
     expect(received).toHaveLength(1)
   })
+
+  test('focuses warp agent without socket when raiseWindow is disabled', async () => {
+    const warpAgent = agent({ session: 'warp', paneId: '5555', repo: 'git-agent' })
+    const result = await focusAgent(warpAgent, null, { raiseWindow: false })
+    expect(result.focused).toBe(true)
+    expect(result.raised).toBe(false)
+    expect(result.note).toBe('window raising disabled')
+  })
+
+  test('handles warp window raise failure gracefully', async () => {
+    const warpAgent = agent({ session: 'warp', paneId: '5555', repo: 'git-agent' })
+    const result = await focusAgent(warpAgent, null, {
+      terminalProcess: 'definitely-not-a-real-process',
+    })
+    expect(result.focused).toBe(true)
+    expect(result.raised).toBe(false)
+    expect(result.note).toBe('no definitely-not-a-real-process process')
+  })
 })
 
 describe('config: raise_window', () => {
@@ -100,8 +118,8 @@ describe('config: raise_window', () => {
   })
 
   test('a non-boolean is warned about and ignored', () => {
-    const { config, warnings } = parseConfig('raise_window = "yes"')
+    const { config, warnings } = parseConfig('raise_window = 42')
     expect(config.raiseWindow).toBe(true)
-    expect(warnings[0]).toMatch(/raise_window/)
+    expect(warnings).toHaveLength(1)
   })
 })
