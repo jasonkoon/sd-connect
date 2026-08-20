@@ -14,8 +14,9 @@ on run argv
   set targetSession to item 1 of argv
   set procName to item 2 of argv
   tell application "System Events"
-    if not (exists process procName) then return "NOPROC"
-    tell process procName
+    set matchingProcs to (every process whose name is procName)
+    if (count of matchingProcs) = 0 then return "NOPROC"
+    tell (item 1 of matchingProcs)
       repeat with w in windows
         set t to value of attribute "AXTitle" of w
         if t contains targetSession then
@@ -36,14 +37,12 @@ on run argv
   set procName to item 2 of argv
   tell application "System Events"
     if procName is not "" then
-      if not (exists process procName) then return "NOPROC"
-      set warpProc to process procName
+      set warpProcs to (every process whose name is procName)
     else
       set warpProcs to (every process whose bundle identifier is "dev.warp.Warp-Stable" or name is "Warp" or name is "stable")
-      if (count of warpProcs) = 0 then return "NOPROC"
-      set warpProc to item 1 of warpProcs
     end if
-    tell warpProc
+    if (count of warpProcs) = 0 then return "NOPROC"
+    tell (item 1 of warpProcs)
       repeat with w in windows
         set t to value of attribute "AXTitle" of w
         if t contains targetRepo then
@@ -52,6 +51,50 @@ on run argv
           return "OK:" & t
         end if
       end repeat
+      if (count of windows) > 0 then
+        set w to item 1 of windows
+        perform action "AXRaise" of w
+        set frontmost to true
+        return "OK:" & (value of attribute "AXTitle" of w)
+      end if
+    end tell
+  end tell
+  return "NOWINDOW"
+end run
+`
+
+const RAISE_TERMINAL_SCRIPT = `
+on run argv
+  set targetRepo to item 1 of argv
+  set procName to item 2 of argv
+  tell application "System Events"
+    if procName is not "" then
+      set targetProcs to (every process whose name is procName)
+      if (count of targetProcs) = 0 then return "NOPROC"
+    else
+      set targetProcs to {}
+      set termNames to {"ghostty", "stable", "Terminal", "iTerm2", "Alacritty", "kitty", "Warp"}
+      repeat with appName in termNames
+        set found to (every process whose name is appName)
+        if (count of found) > 0 then
+          set targetProcs to targetProcs & found
+        end if
+      end repeat
+      if (count of targetProcs) = 0 then return "NOPROC"
+    end if
+    repeat with procItem in targetProcs
+      tell procItem
+        repeat with w in windows
+          set t to value of attribute "AXTitle" of w
+          if t contains targetRepo then
+            perform action "AXRaise" of w
+            set frontmost to true
+            return "OK:" & t
+          end if
+        end repeat
+      end tell
+    end repeat
+    tell (item 1 of targetProcs)
       if (count of windows) > 0 then
         set w to item 1 of windows
         perform action "AXRaise" of w
@@ -117,6 +160,27 @@ export async function raiseWarpWindow(
   }
 }
 
+export async function raiseTerminalWindow(
+  repo: string,
+  terminalProcess?: string,
+): Promise<{ raised: boolean; note?: string }> {
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-e', RAISE_TERMINAL_SCRIPT, repo, terminalProcess ?? ''],
+      { timeout: APPLESCRIPT_TIMEOUT_MS },
+    )
+    const output = stdout.trim()
+    if (output.startsWith('OK:')) return { raised: true }
+    if (output === 'NOPROC') return { raised: false, note: `no ${terminalProcess || 'terminal'} process` }
+    if (output === 'NOWINDOW') return { raised: false, note: 'no terminal window found' }
+    return { raised: false, note: `unexpected osascript output: ${output}` }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return { raised: false, note: message.split('\n')[0] ?? message }
+  }
+}
+
 export async function focusAgent(
   agent: Agent,
   socketPath: string | null,
@@ -124,10 +188,15 @@ export async function focusAgent(
 ): Promise<FocusResult> {
   const shouldRaise = options.raiseWindow ?? true
 
-  if (agent.session === 'warp' || !socketPath) {
-    const windowResult = shouldRaise
-      ? await raiseWarpWindow(agent.repo, options.terminalProcess)
-      : { raised: false, note: 'window raising disabled' }
+  if (!socketPath) {
+    let windowResult = { raised: false, note: 'window raising disabled' }
+    if (shouldRaise) {
+      if (agent.session === 'warp') {
+        windowResult = await raiseWarpWindow(agent.repo, options.terminalProcess)
+      } else {
+        windowResult = await raiseTerminalWindow(agent.repo, options.terminalProcess)
+      }
+    }
     return { focused: true, raised: windowResult.raised, note: windowResult.note }
   }
 

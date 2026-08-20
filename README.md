@@ -1,12 +1,13 @@
 # sd-connect
 
 Drive an Elgato Stream Deck MK.2, or a Fifine Ampligame D6, directly — no
-vendor software — to show the live status of every agent across all
-[herdr](https://github.com/) sessions and Warp terminal windows.
+vendor software — to show the live status of every Pi and Claude Code agent
+across all [herdr](https://github.com/) sessions, Warp terminal windows, and
+standalone terminal sessions.
 
 Each key shows one agent as a status colour bar plus its repo and session name.
-Pressing a key jumps to that agent: it raises the terminal window for that herdr
-or Warp session and focuses the right workspace, tab and pane.
+Pressing a key jumps to that agent: it raises the terminal window for that
+session and focuses the right workspace, tab and pane.
 
 The same display is also served at <http://127.0.0.1:8787> (configurable) for
 when the deck is not plugged in — same keys, same pixels, and clicking one jumps
@@ -153,7 +154,7 @@ done    = "#eab308"
 unknown = "#6b7280"
 
 # Pin an agent to a fixed key, identified by session + cwd.
-# session can be a herdr session name ("zephyr") or "warp".
+# session can be a herdr session name ("zephyr"), "warp", "claude", or "pi".
 # Keys are numbered left to right, top to bottom: 0-4, 5-9, 10-14.
 # A pinned key stays dark when that agent is not running.
 [[pins]]
@@ -165,6 +166,11 @@ cwd     = "/Users/you/dev/sd-connect"
 key     = 1
 session = "warp"
 cwd     = "/Users/you/dev/git-agent"
+
+[[pins]]
+key     = 2
+session = "claude"
+cwd     = "/Users/you/dev/my-project"
 ```
 
 Unpinned agents flow into whatever keys are left, in a stable order (session,
@@ -181,8 +187,8 @@ A press jumps to that agent:
   1. Raise the terminal window whose title mentions that herdr session (Ghostty).
   2. Call herdr's `agent.focus`, which moves workspace, tab and pane focus at once.
 
-- **For Warp agents:**
-  1. Raise the Warp window matching that agent's repository.
+- **For Warp or standalone agents (Claude Code / Pi):**
+  1. Raise the terminal window matching that agent's repository.
 
 Both herdr steps are needed because `agent.focus` alone moves focus *inside* a
 session but does not touch the window server, so focusing a `canaries` agent

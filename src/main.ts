@@ -195,10 +195,6 @@ async function main(): Promise<void> {
     void (async () => {
       try {
         const socketPath = poller.socketFor(agent.session)
-        if (!socketPath && agent.session !== 'warp') {
-          console.error(`[sd-connect] cannot focus ${agent.repo}: session '${agent.session}' is gone`)
-          return
-        }
         const result = await focusAgent(agent, socketPath, { raiseWindow: config.raiseWindow })
         if (!result.focused) {
           console.error(`[sd-connect] focus failed for ${agent.repo}: ${result.note}`)
