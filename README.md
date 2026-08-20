@@ -2,11 +2,11 @@
 
 Drive an Elgato Stream Deck MK.2, or a Fifine Ampligame D6, directly — no
 vendor software — to show the live status of every agent across all
-[herdr](https://github.com/) sessions.
+[herdr](https://github.com/) sessions and Warp terminal windows.
 
 Each key shows one agent as a status colour bar plus its repo and session name.
 Pressing a key jumps to that agent: it raises the terminal window for that herdr
-session and focuses the right workspace, tab and pane.
+or Warp session and focuses the right workspace, tab and pane.
 
 The same display is also served at <http://127.0.0.1:8787> (configurable) for
 when the deck is not plugged in — same keys, same pixels, and clicking one jumps
@@ -153,12 +153,18 @@ done    = "#eab308"
 unknown = "#6b7280"
 
 # Pin an agent to a fixed key, identified by session + cwd.
+# session can be a herdr session name ("zephyr") or "warp".
 # Keys are numbered left to right, top to bottom: 0-4, 5-9, 10-14.
 # A pinned key stays dark when that agent is not running.
 [[pins]]
 key     = 0
 session = "zephyr"
 cwd     = "/Users/you/dev/sd-connect"
+
+[[pins]]
+key     = 1
+session = "warp"
+cwd     = "/Users/you/dev/git-agent"
 ```
 
 Unpinned agents flow into whatever keys are left, in a stable order (session,
@@ -169,32 +175,34 @@ then working) so `blocked` and `done` always survive, and the last key becomes a
 
 ## Pressing keys
 
-A press jumps to that agent, in two steps:
+A press jumps to that agent:
 
-1. Raise the terminal window whose title mentions that herdr session.
-2. Call herdr's `agent.focus`, which moves workspace, tab and pane focus at once.
+- **For herdr sessions:**
+  1. Raise the terminal window whose title mentions that herdr session (Ghostty).
+  2. Call herdr's `agent.focus`, which moves workspace, tab and pane focus at once.
 
-Both steps are needed. `agent.focus` alone moves focus *inside* a session but
-does not touch the window server, so focusing a `canaries` agent while the
-`zephyr` window is frontmost changes nothing you can see. This was verified by
-doing exactly that.
+- **For Warp agents:**
+  1. Raise the Warp window matching that agent's repository.
 
-Step 1 is AppleScript UI scripting against Ghostty, matching the session name
-against window titles (herdr names its client windows
-`herdr session attach <name>`). That means it depends on:
+Both herdr steps are needed because `agent.focus` alone moves focus *inside* a
+session but does not touch the window server, so focusing a `canaries` agent
+while the `zephyr` window is frontmost changes nothing you can see.
+
+Window raising uses AppleScript UI scripting against Ghostty or Warp. That means
+it depends on:
 
 - Accessibility permission for whatever runs the daemon
-- a terminal whose window titles contain the session name
+- a terminal window matching the session name (herdr) or repo name (Warp)
 
-If the window cannot be found, the press still focuses inside herdr and logs a
+If the window cannot be found, herdr presses still focus inside herdr and log a
 warning, so it degrades rather than failing outright. Set `raise_window = false`
-to skip step 1 entirely.
+to skip window raising entirely.
 
 Presses act on key *release*, so holding a key does one thing rather than
 repeating, and overlapping presses are ignored while a jump is in flight.
 Pressing an empty or `+N more` key does nothing.
 
-## Watching herdr (no hardware needed)
+## Watching agents (no hardware needed)
 
 ```sh
 npm run watch          # stream agent status as it changes
@@ -210,8 +218,9 @@ Example:
 
 [12:28:01 PM] 6 agent(s)
    0 * canaries          working canaries/w1:p2
-   1 o zephyr_cloudflow  idle    zephyr/w1:p1
-   2 v portal            done    zephyr/w2:p1
+   1 o git-agent         idle    warp/75139
+   2 o zephyr_cloudflow  idle    zephyr/w1:p1
+   3 v portal            done    zephyr/w2:p1
 ```
 
 ## Smoke test
@@ -518,9 +527,12 @@ src/
   herdr/
     protocol.ts     NDJSON request/response over the Unix socket
     sessions.ts     discover sessions, prove liveness with a ping
-    poller.ts       poll agent.list, emit only real changes
+    poller.ts       poll agent.list + Warp scanner, emit only real changes
     watch.ts        headless view of the merged model
     herdr.test.ts   protocol, discovery and polling, vs a fake server
+  warp/
+    discover.ts     discover pi agents in Warp, parse session state, CWD caching
+    discover.test.ts process matching, session state parsing, CWD resolution
   main.ts           the daemon: poller -> layout -> renderer -> sinks
   frame.ts          a rendered frame, and the Sink interface
   config.ts         ~/.config/sd-connect/config.toml, validated
