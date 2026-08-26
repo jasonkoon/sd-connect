@@ -19,7 +19,7 @@ import type { Frame, Sink } from '../../frame.ts'
 import { KEY_COLUMNS } from '../../deck.ts'
 import { toPng } from '../../render/png.ts'
 import { slotKey } from '../../render/tile.ts'
-import type { Agent, Slot } from '../../types.ts'
+import type { Agent, MacroAction, Slot } from '../../types.ts'
 import { PAGE } from './page.ts'
 
 // Re-exported for convenience; defined in config.ts so the default lives in
@@ -41,6 +41,8 @@ export interface WebSinkOptions {
   columns?: number
   /** Invoked when a key showing an agent is clicked. */
   onPress?: (agent: Agent) => void | Promise<void>
+  /** Invoked when a macro key is clicked. */
+  onMacro?: (key: number, action: MacroAction) => void | Promise<void>
   verbose?: boolean
 }
 
@@ -62,6 +64,8 @@ function labelFor(slot: Slot): string {
   switch (slot.kind) {
     case 'empty':
       return slot.pinned ? 'reserved' : ''
+    case 'macro':
+      return `${slot.label} — macro`
     case 'overflow':
       return `${slot.count} more not shown`
     case 'agent':
@@ -86,6 +90,7 @@ export class WebSink implements Sink {
   #portSource: string
   #columns: number
   #onPress: WebSinkOptions['onPress']
+  #onMacro: WebSinkOptions['onMacro']
   #verbose: boolean
   #clients = new Set<ServerResponse>()
   #frame: Frame | null = null
@@ -100,6 +105,7 @@ export class WebSink implements Sink {
     this.#portSource = options.portSource ?? 'default'
     this.#columns = options.columns ?? KEY_COLUMNS
     this.#onPress = options.onPress
+    this.#onMacro = options.onMacro
     this.#verbose = options.verbose ?? false
     this.#server = createServer((req, res) => void this.#handle(req, res))
   }
@@ -161,7 +167,7 @@ export class WebSink implements Sink {
         const tile = frame.tiles[i]
         if (tile) pngs.set(id, this.#pngs.get(id) ?? toPng(tile))
       }
-      return { tile: id, label: labelFor(slot), pressable: slot.kind === 'agent' }
+      return { tile: id, label: labelFor(slot), pressable: slot.kind === 'agent' || slot.kind === 'macro' }
     })
     this.#pngs = pngs
     this.#view = { keys, columns: this.#columns, dropped: frame.dropped.length }
@@ -275,11 +281,17 @@ export class WebSink implements Sink {
     }
 
     if (!Number.isInteger(index) || !slot) return json(400, { error: 'no such key' })
-    if (slot.kind !== 'agent') return json(400, { error: 'key has no agent' })
 
     // Fire and forget, exactly like the deck's onKeyUp: focusing takes ~140ms
     // of AppleScript and the click should not block on it.
-    void this.#onPress?.(slot.agent)
-    json(200, { ok: true, repo: slot.agent.repo })
+    if (slot.kind === 'agent') {
+      void this.#onPress?.(slot.agent)
+      return json(200, { ok: true, repo: slot.agent.repo })
+    }
+    if (slot.kind === 'macro') {
+      void this.#onMacro?.(index, slot.action)
+      return json(200, { ok: true, label: slot.label })
+    }
+    return json(400, { error: 'key has no pressable action' })
   }
 }

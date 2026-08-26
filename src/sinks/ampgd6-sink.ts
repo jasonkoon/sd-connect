@@ -10,7 +10,7 @@
 
 import { AmpGd6, AmpGd6UnavailableError, ampGd6Present } from '../ampgd6.ts'
 import type { Frame, Sink } from '../frame.ts'
-import type { Agent } from '../types.ts'
+import type { Agent, MacroAction } from '../types.ts'
 
 const RECONNECT_DELAY_MS = 2000
 
@@ -18,6 +18,7 @@ export interface AmpGd6SinkOptions {
   brightness: number
   verbose: boolean
   onPress?: (agent: Agent) => void
+  onMacro?: (key: number, action: MacroAction) => void
 }
 
 export class AmpGd6Sink implements Sink {
@@ -27,6 +28,7 @@ export class AmpGd6Sink implements Sink {
   #brightness: number
   #verbose: boolean
   #onPress: ((agent: Agent) => void) | null
+  #onMacro: ((key: number, action: MacroAction) => void) | null
   #lastFrame: Frame | null = null
   #reconnecting = false
   #stopped = false
@@ -35,6 +37,7 @@ export class AmpGd6Sink implements Sink {
     this.#brightness = options.brightness
     this.#verbose = options.verbose
     this.#onPress = options.onPress ?? null
+    this.#onMacro = options.onMacro ?? null
   }
 
   get connected(): boolean {
@@ -50,6 +53,11 @@ export class AmpGd6Sink implements Sink {
     return slot?.kind === 'agent' ? slot.agent : null
   }
 
+  macroAt(index: number): { key: number; action: MacroAction } | null {
+    const slot = this.#lastFrame?.slots[index]
+    return slot?.kind === 'macro' ? { key: index, action: slot.action } : null
+  }
+
   async connect(): Promise<boolean> {
     try {
       const device = await AmpGd6.open({ brightness: this.#brightness })
@@ -59,7 +67,9 @@ export class AmpGd6Sink implements Sink {
       })
       device.onKeyUp((index) => {
         const agent = this.agentAt(index)
+        const macro = this.macroAt(index)
         if (agent) this.#onPress?.(agent)
+        else if (macro) this.#onMacro?.(macro.key, macro.action)
       })
       this.#device = device
       console.log(`[sd-connect] ampgd6 connected: ${device.keyCount} keys`)

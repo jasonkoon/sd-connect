@@ -20,12 +20,13 @@ import { focusAgent } from './focus.ts'
 import type { Frame, Sink } from './frame.ts'
 import { AgentPoller } from './herdr/poller.ts'
 import { layout } from './layout.ts'
+import { runMacroAction } from './macros.ts'
 import { TileRenderer } from './render/tile.ts'
 import { installShutdownHandlers, onShutdown, shutdown } from './shutdown.ts'
 import { AmpGd6Sink } from './sinks/ampgd6-sink.ts'
 import { DeckSink } from './sinks/deck-sink.ts'
 import { WebSink } from './sinks/web/server.ts'
-import type { Agent } from './types.ts'
+import type { Agent, MacroAction } from './types.ts'
 
 interface Flags {
   once: boolean
@@ -86,11 +87,18 @@ async function main(): Promise<void> {
   // Declared before the sinks because both press paths call it, and the poller
   // it needs is created after them. Assigned once everything exists.
   let press: (agent: Agent) => void = () => {}
+  // Macro presses do not need the poller, so they can be declared and wired
+  // immediately.
+  const runMacro = (key: number, action: MacroAction) => {
+    const started = runMacroAction(action, key)
+    if (started) console.log(`[sd-connect] macro key ${key} triggering ${action.type}`)
+  }
 
   const deckSink = new DeckSink({
     brightness: config.brightness,
     verbose: flags.verbose,
     onPress: (agent) => press(agent),
+    onMacro: runMacro,
   })
 
   // Both hardware sinks are always present; each is a no-op until its own
@@ -102,6 +110,7 @@ async function main(): Promise<void> {
     brightness: config.brightness,
     verbose: flags.verbose,
     onPress: (agent) => press(agent),
+    onMacro: runMacro,
   })
 
   const sinks: Sink[] = [deckSink, ampgd6Sink]
@@ -116,6 +125,7 @@ async function main(): Promise<void> {
       port: flags.port ?? config.web.port,
       portSource: flags.port !== null ? '--port' : existed ? 'config' : 'default',
       onPress: (agent) => press(agent),
+      onMacro: runMacro,
       verbose: flags.verbose,
     })
     // A viewer that cannot bind is not fatal; the deck still works without it.
@@ -154,7 +164,7 @@ async function main(): Promise<void> {
    */
   const show = async (agents: Agent[]): Promise<void> => {
     const keyCount = deckSink.keyCount ?? ampgd6Sink.keyCount ?? KEY_COUNT
-    const { slots, dropped } = layout(agents, { keyCount, pins: config.pins })
+    const { slots, dropped } = layout(agents, { keyCount, pins: config.pins, macros: config.macros })
     const frame: Frame = {
       slots,
       tiles: slots.map((slot) => renderer.render(slot)),

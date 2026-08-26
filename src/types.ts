@@ -70,6 +70,19 @@ export function renderIdentity(agent: Agent): string {
 }
 
 /**
+ * What a macro key does when pressed.
+ *
+ * `command` is the primary action: an arbitrary shell line run via /bin/zsh -c.
+ * `url` and `app` are reserved so the schema can grow without a breaking change;
+ * validation recognises them, but a runner that sees one logs an unimplemented
+ * warning rather than doing something half-baked.
+ */
+export type MacroAction =
+  | { type: 'command'; run: string }
+  | { type: 'url'; url: string }
+  | { type: 'app'; app: string }
+
+/**
  * What occupies a single Stream Deck key.
  *
  * `empty.pinned` distinguishes a key held open by a pin whose agent is not
@@ -79,7 +92,18 @@ export function renderIdentity(agent: Agent): string {
 export type Slot =
   | { kind: 'empty'; pinned: boolean }
   | { kind: 'agent'; agent: Agent }
+  | { kind: 'macro'; label: string; color: string | null; action: MacroAction }
   | { kind: 'overflow'; count: number }
+
+/** A macro key as configured; becomes a `macro` slot at layout time. */
+export interface MacroConfig {
+  key: number
+  /** Text drawn on the tile. */
+  label: string
+  /** Optional tile accent colour. Null falls back to the theme default. */
+  color?: string
+  action: MacroAction
+}
 
 export const EMPTY_SLOT: Slot = { kind: 'empty', pinned: false }
 export const PINNED_EMPTY_SLOT: Slot = { kind: 'empty', pinned: true }

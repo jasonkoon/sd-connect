@@ -12,7 +12,7 @@
 
 import { Deck, DeckUnavailableError, deckPresent, openDeck } from '../deck.ts'
 import type { Frame, Sink } from '../frame.ts'
-import type { Agent } from '../types.ts'
+import type { Agent, MacroAction } from '../types.ts'
 
 const RECONNECT_DELAY_MS = 2000
 
@@ -21,6 +21,8 @@ export interface DeckSinkOptions {
   verbose: boolean
   /** Invoked when a key showing an agent is released. */
   onPress?: (agent: Agent) => void
+  /** Invoked when a macro key is released. */
+  onMacro?: (key: number, action: MacroAction) => void
 }
 
 export class DeckSink implements Sink {
@@ -30,6 +32,7 @@ export class DeckSink implements Sink {
   #brightness: number
   #verbose: boolean
   #onPress: ((agent: Agent) => void) | null
+  #onMacro: ((key: number, action: MacroAction) => void) | null
   #lastFrame: Frame | null = null
   #reconnecting = false
   #stopped = false
@@ -38,6 +41,7 @@ export class DeckSink implements Sink {
     this.#brightness = options.brightness
     this.#verbose = options.verbose
     this.#onPress = options.onPress ?? null
+    this.#onMacro = options.onMacro ?? null
   }
 
   get connected(): boolean {
@@ -54,10 +58,16 @@ export class DeckSink implements Sink {
     return this.#deck?.keyCount ?? null
   }
 
-  /** The agent displayed on a key, or null for empty and overflow keys. */
+  /** The agent displayed on a key, or null for empty, overflow and macro keys. */
   agentAt(index: number): Agent | null {
     const slot = this.#lastFrame?.slots[index]
     return slot?.kind === 'agent' ? slot.agent : null
+  }
+
+  /** The macro on a key, or null for any non-macro key. */
+  macroAt(index: number): { key: number; action: MacroAction } | null {
+    const slot = this.#lastFrame?.slots[index]
+    return slot?.kind === 'macro' ? { key: index, action: slot.action } : null
   }
 
   async connect(): Promise<boolean> {
@@ -74,7 +84,9 @@ export class DeckSink implements Sink {
       // button, and it avoids firing twice if a key is held.
       deck.onKeyUp((index) => {
         const agent = this.agentAt(index)
+        const macro = this.macroAt(index)
         if (agent) this.#onPress?.(agent)
+        else if (macro) this.#onMacro?.(macro.key, macro.action)
       })
       this.#deck = deck
       console.log(`[sd-connect] deck connected: ${deck.device.MODEL}, ${deck.keyCount} keys`)
@@ -163,6 +175,7 @@ function describe(frame: Frame): string {
     .map((slot, i) => {
       if (slot.kind === 'empty') return null
       if (slot.kind === 'overflow') return `${i}:+${slot.count}`
+      if (slot.kind === 'macro') return `${i}:macro[${slot.label}]`
       return `${i}:${slot.agent.repo}(${slot.agent.status})`
     })
     .filter((s): s is string => s !== null)

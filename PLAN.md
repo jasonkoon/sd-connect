@@ -57,7 +57,7 @@ where the basename `src` would have been useless.
 
 | Area | Decision |
 | --- | --- |
-| Interaction | Phase 1 display only. Phase 2 (done): press = jump to that agent. |
+| Interaction | Phase 1 display only. Phase 2 (done): press = jump to that agent. Phase 6 (in progress): macro keys run configured actions. |
 | Deckless use | Phase 4 (done): same frame served on localhost, click = press. |
 | Layout | Pinned slots first, remaining agents auto-flow into free keys. |
 | Key face | Status color bar + repo name + session name. |
@@ -65,6 +65,7 @@ where the basename `src` would have been useless.
 | Animation | None. Static, fully event-driven. |
 | Lifecycle | launchd agent at login (done), plus a foreground CLI for debugging. |
 | Pin identity | `session + cwd`. |
+| Macro identity | Fixed key from config; runs an action (`command` now, `url`/`app` reserved). |
 | Label | Git repo root basename. |
 | Stack | TypeScript on Node 24 (started on Bun; moved after Bun segfaulted on unplug). |
 
@@ -320,6 +321,65 @@ single flush, button press/release, clear-all, disconnect on unplug
 (`hid_read_timeout`, caught the same way as the Stream Deck's own error path),
 and reconnect-with-repaint on replug.
 
+## Phase 6: macro keys (in progress)
+
+A key can now run a configured action instead of focusing an agent. Populated
+entirely from config, like pins: no code change is needed to add, move, or
+remove a macro.
+
+### Design
+
+- **Action types are typed and extensible.** `command` (shell) is the first and
+  primary type; `url` and `app` are stubbed-and-valid but reserved so the schema
+  can grow without a breaking change.
+- **Macros live on the same 15-key grid as pins and auto-flow agents.** A macro
+  key is reserved by config, exactly like a pin: agents never flow into it and
+  it is never evicted by overflow.
+- **Key face:** custom label + color (default from the theme), a resolved
+  extension of the existing agent tile look.
+- **Press feedback:** flash on press (web viewer) plus a brief "running" state;
+  on hardware the press just runs, matching the natural feel of a button.
+- **Execution:** shell commands are fire-and-forget via `/bin/zsh -c`, exit code
+  logged, with a per-macro concurrency guard so a slow command cannot stack
+  duplicate runs of the same key.
+
+### Config
+
+```toml
+[[macros]]
+key     = 14
+label   = "Deploy"
+color   = "#8b5cf6"   # optional; default from theme
+
+[macros.action]
+type = "command"      # | "url" | "app" (reserved for later)
+run  = "/Users/you/bin/deploy"
+```
+
+### Modules
+
+- `src/macros.ts` — validate and run macro actions; `command` spawns `/bin/zsh -c`
+  detached with a per-macro guard; logs exit codes.
+- `src/types.ts` — new `macro` slot kind carrying the action, label, and color.
+- `src/config.ts` — parse/validate `[[macros]]` in the existing warn-and-ignore
+  style.
+- `src/layout.ts` — reserve macro keys (like pins); precedence vs pins is first-
+  listed-wins on a key, duplicate keys warn and are ignored.
+- `src/sinks/*` and `src/sinks/web/server.ts` — press dispatch goes through the
+  slot at the index, so a macro press runs the action instead of focusing.
+- `src/main.ts` — wire a `runMacro(path)` alongside the existing `press()`.
+
+### Build order
+
+1. Types + config schema (`macro` slot; `[[macros]]` parse + tests).
+2. Layout: reserve macro keys, precedence + tests.
+3. `src/macros.ts` action runner: validate, run command, guard, log.
+4. Renderer: macro tile (label + color).
+5. Sink/press plumbing: sink `onKeyUp` dispatch for macro slots; web `/press/`
+   accepts macros; wire `runMacro` in `main.ts`.
+6. Web viewer: macro keys label/pressable, keep the flash.
+7. Docs: README config section, layout section; extend test suites.
+
 ## Multiple machines
 
 Supported for identical models. The daemon opens whichever deck is present
@@ -337,4 +397,5 @@ the opened device.
 Remote (non-loopback) access to the web viewer, and any authentication for it.
 Multi-page navigation, non-herdr data sources, Stream Deck models other than
 MK.2, and any press action other than focus (prompting, sending keys) — the API
-supports them, but they are not wired up.
+supports them, but they are not wired up. Macro actions beyond `command`
+(`url`/`app`) are schema-reserved but not yet implemented.

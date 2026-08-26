@@ -16,7 +16,15 @@
  * who gets dropped when space runs out.
  */
 
-import { agentKey, EMPTY_SLOT, PINNED_EMPTY_SLOT, STATUS_PRIORITY, type Agent, type Slot } from './types.ts'
+import {
+  agentKey,
+  EMPTY_SLOT,
+  PINNED_EMPTY_SLOT,
+  STATUS_PRIORITY,
+  type Agent,
+  type MacroConfig,
+  type Slot,
+} from './types.ts'
 
 /** A pin ties one agent, identified by session + cwd, to one key. */
 export interface Pin {
@@ -28,6 +36,7 @@ export interface Pin {
 export interface LayoutOptions {
   keyCount: number
   pins?: readonly Pin[]
+  macros?: readonly MacroConfig[]
 }
 
 export interface LayoutResult {
@@ -87,18 +96,36 @@ export function layout(agents: readonly Agent[], options: LayoutOptions): Layout
   const slots: Slot[] = new Array<Slot>(keyCount).fill(EMPTY_SLOT)
   if (keyCount <= 0) return { slots: [], dropped: [...agents] }
 
-  // 1. Pins. Only in-range keys count; a pin pointing off the end of the deck
-  // is ignored rather than throwing, since the config is hand-edited.
+  // 1. Pins and macros. Only in-range keys count; a pin pointing off the end
+  // of the deck is ignored rather than throwing, since the config is
+  // hand-edited.
   const pins = (options.pins ?? []).filter((p) => Number.isInteger(p.key) && p.key >= 0 && p.key < keyCount)
+  const macros = (options.macros ?? []).filter(
+    (m) => Number.isInteger(m.key) && m.key >= 0 && m.key < keyCount,
+  )
 
-  const pinnedKeys = new Set<number>()
+  const reservedKeys = new Set<number>()
   const claimed = new Set<string>()
 
+  // Macros first: a macro key is a hard reservation (like a pin) and its
+  // action, not the agent list, decides what the key shows. First listed for a
+  // key wins, so a duplicate or a pin/macro clash is predictable rather than
+  // order-dependent.
+  for (const macro of macros) {
+    if (reservedKeys.has(macro.key)) continue
+    reservedKeys.add(macro.key)
+    slots[macro.key] = {
+      kind: 'macro',
+      label: macro.label,
+      color: macro.color ?? null,
+      action: macro.action,
+    }
+  }
+
   for (const pin of pins) {
-    // First pin listed for a key wins, so a duplicate key in config is
-    // predictable rather than order-dependent on the agent list.
-    if (pinnedKeys.has(pin.key)) continue
-    pinnedKeys.add(pin.key)
+    // First pin listed for a key wins, and a pin never displaces a macro.
+    if (reservedKeys.has(pin.key)) continue
+    reservedKeys.add(pin.key)
 
     // First unclaimed matching agent. Two panes in the same session and cwd is
     // legal; the extras simply flow into the auto region.
@@ -118,7 +145,7 @@ export function layout(agents: readonly Agent[], options: LayoutOptions): Layout
 
   const freeKeys: number[] = []
   for (let i = 0; i < keyCount; i++) {
-    if (!pinnedKeys.has(i)) freeKeys.push(i)
+    if (!reservedKeys.has(i)) freeKeys.push(i)
   }
 
   // 3. Fit, reserving the last free key for the overflow tile if needed.

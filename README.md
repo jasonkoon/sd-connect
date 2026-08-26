@@ -179,6 +179,33 @@ agents than keys, the least interesting are dropped first (unknown, then idle,
 then working) so `blocked` and `done` always survive, and the last key becomes a
 `+N more` tile.
 
+### Macro keys
+
+Any key can instead be a **macro**: a fixed key that runs an action when
+pressed, rather than focusing an agent. Macros live on the same grid as pins
+and auto-flow agents, and, like pins, they are reserved — an agent never flows
+into a macro key and it is never evicted by overflow. `[[pins]]` and
+`[[macros]]` cannot share a key.
+
+```toml
+# A macro key: label is drawn on the tile, color is the accent bar (optional,
+# defaults to the theme's macro color).
+[[macros]]
+key   = 14
+label = "Deploy"
+color = "#8b5cf6"
+
+[macros.action]
+type = "command"        # command is the only implemented type
+run  = "/Users/you/bin/deploy"   # any shell line, run via /bin/zsh -c
+```
+
+`command` actions run fire-and-forget detached: a press never blocks the poll
+loop or the next press. A repeated press while a macro is still running is
+ignored (per macro, so two different macros run independently). The exit code
+is logged. `url` and `app` action types are recognised and validated but not yet
+implemented — a macro configured with one logs a warning on press.
+
 ## Pressing keys
 
 A press jumps to that agent:
@@ -543,7 +570,8 @@ src/
   frame.ts          a rendered frame, and the Sink interface
   config.ts         ~/.config/sd-connect/config.toml, validated
   config.test.ts    config validation, notably [web]
-  layout.ts         pins, auto-flow, overflow eviction
+  layout.ts         pins, macros, auto-flow, overflow eviction
+  macros.ts         run macro actions (command; url/app reserved)
   focus.ts          key press -> raise window + herdr agent.focus
   focus.test.ts     focus behaviour and its failure modes
   layout.test.ts    layout and config

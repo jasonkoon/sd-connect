@@ -6,6 +6,8 @@ export interface Theme {
   background: string
   /** Background for a key whose pinned agent is currently absent. */
   pinnedEmptyBackground: string
+  /** Accent colour for a macro key whose label has no explicit colour. */
+  macroColor: string
   repoColor: string
   sessionColor: string
   overflowColor: string
@@ -18,6 +20,7 @@ export interface Theme {
 export const DEFAULT_THEME: Theme = {
   background: '#14161a',
   pinnedEmptyBackground: '#0a0b0d',
+  macroColor: '#8b5cf6',
   repoColor: '#ffffff',
   sessionColor: '#8a90a0',
   overflowColor: '#c8ccd6',

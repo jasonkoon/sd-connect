@@ -12,7 +12,13 @@
 import { createCanvas } from '@napi-rs/canvas'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { ICON_SIZE, KEY_COLUMNS, KEY_ROWS } from '../deck.ts'
-import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
+import {
+  EMPTY_SLOT,
+  PINNED_EMPTY_SLOT,
+  type Agent,
+  type AgentStatus,
+  type Slot,
+} from '../types.ts'
 import { toCanvas, toPng } from './png.ts'
 import { TileRenderer } from './tile.ts'
 
@@ -52,6 +58,8 @@ const SAMPLES: Array<{ name: string; slot: Slot }> = [
   { name: '09-hyphen-wrap', slot: { kind: 'agent', agent: agent('winning-edge-coaching', 'koon', 'done') } },
   { name: '10-overflow', slot: { kind: 'overflow', count: 4 } },
   { name: '11-empty', slot: PINNED_EMPTY_SLOT },
+  { name: '12-macro-deploy', slot: { kind: 'macro', label: 'Deploy', color: '#8b5cf6', action: { type: 'command', run: 'true' } } },
+  { name: '13-macro-short', slot: { kind: 'macro', label: 'RTFM', color: null, action: { type: 'url', url: 'https://example.com' } } },
 ]
 
 function parseScale(): number {

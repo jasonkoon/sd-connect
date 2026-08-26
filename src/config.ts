@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
-import { AGENT_STATUSES, type AgentStatus } from './types.ts'
+import { AGENT_STATUSES, type AgentStatus, type MacroAction, type MacroConfig } from './types.ts'
 import type { Pin } from './layout.ts'
 import { DEFAULT_THEME, type Theme } from './render/theme.ts'
 
@@ -32,6 +32,7 @@ export interface Config {
    */
   raiseWindow: boolean
   pins: Pin[]
+  macros: MacroConfig[]
   theme: Theme
 }
 
@@ -65,6 +66,7 @@ export const DEFAULT_CONFIG: Config = {
   raiseWindow: true,
   web: DEFAULT_WEB_CONFIG,
   pins: [],
+  macros: [],
   theme: DEFAULT_THEME,
 }
 
@@ -103,6 +105,7 @@ export function parseConfig(text: string): ParseResult {
     ...DEFAULT_CONFIG,
     web: { ...DEFAULT_WEB_CONFIG },
     pins: [],
+    macros: [],
     theme: { ...DEFAULT_THEME, statusColors: { ...DEFAULT_THEME.statusColors } },
   }
 
@@ -207,7 +210,91 @@ export function parseConfig(text: string): ParseResult {
     }
   }
 
+  if (raw.macros !== undefined) {
+    if (!Array.isArray(raw.macros)) {
+      warnings.push('macros must be an array of [[macros]] tables')
+    } else {
+      const usedKeys = new Set<number>()
+      raw.macros.forEach((entry, index) => {
+        const macro = asRecord(entry)
+        const label = `macros[${index}]`
+        if (!macro) {
+          warnings.push(`${label} is not a table`)
+          return
+        }
+        const { key, label: text, color, action } = macro
+        if (typeof key !== 'number' || !Number.isInteger(key) || key < 0) {
+          warnings.push(`${label}.key must be a non-negative integer, got ${JSON.stringify(key)}`)
+          return
+        }
+        if (typeof text !== 'string' || text === '') {
+          warnings.push(`${label}.label must be a non-empty string`)
+          return
+        }
+        let macroColor: string | undefined
+        if (color !== undefined) {
+          if (typeof color !== 'string' || !HEX_COLOR.test(color)) {
+            warnings.push(`${label}.color must be #rrggbb, got ${JSON.stringify(color)}`)
+          } else {
+            macroColor = color
+          }
+        }
+        const parsedAction = parseMacroAction(action, label, warnings)
+        if (!parsedAction) return
+        if (usedKeys.has(key)) {
+          warnings.push(`${label}.key ${key} is already a macro; ignoring the duplicate`)
+          return
+        }
+        usedKeys.add(key)
+        config.macros.push({ key, label: text, color: macroColor, action: parsedAction })
+      })
+    }
+  }
+
   return { config, warnings }
+}
+
+/** Validate a macro's `[macros.action]` table. Returns null on any problem. */
+function parseMacroAction(
+  action: unknown,
+  label: string,
+  warnings: string[],
+): MacroAction | null {
+  const record = asRecord(action)
+  if (!record) {
+    warnings.push(`${label}.action must be a table`)
+    return null
+  }
+  const { type } = record
+  switch (type) {
+    case 'command': {
+      const { run } = record
+      if (typeof run !== 'string' || run === '') {
+        warnings.push(`${label}.action.run must be a non-empty string`)
+        return null
+      }
+      return { type: 'command', run }
+    }
+    case 'url': {
+      const { url } = record
+      if (typeof url !== 'string' || url === '') {
+        warnings.push(`${label}.action.url must be a non-empty string`)
+        return null
+      }
+      return { type: 'url', url }
+    }
+    case 'app': {
+      const { app } = record
+      if (typeof app !== 'string' || app === '') {
+        warnings.push(`${label}.action.app must be a non-empty string`)
+        return null
+      }
+      return { type: 'app', app }
+    }
+    default:
+      warnings.push(`${label}.action.type must be one of command, url, app, got ${JSON.stringify(type)}`)
+      return null
+  }
 }
 
 /** Load config from disk. Missing file yields defaults with no warnings. */

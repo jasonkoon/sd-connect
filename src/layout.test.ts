@@ -22,10 +22,16 @@ function agent(
   }
 }
 
-/** Compact view of a frame: repo name per key, '.' for empty. */
+/** Compact view of a frame: repo name per key, '.' for empty, 'mac' for macro. */
 function shape(slots: readonly Slot[]): string[] {
   return slots.map((s) =>
-    s.kind === 'agent' ? s.agent.repo : s.kind === 'overflow' ? `+${s.count}` : '.',
+    s.kind === 'agent'
+      ? s.agent.repo
+      : s.kind === 'overflow'
+        ? `+${s.count}`
+        : s.kind === 'macro'
+          ? 'mac'
+          : '.',
   )
 }
 
@@ -198,6 +204,85 @@ describe('layout: pins', () => {
   })
 })
 
+describe('layout: macros', () => {
+  const pin = (key: number, session: string, cwd: string): Pin => ({ key, session, cwd })
+
+  test('places a macro on its key', () => {
+    const agents = [agent('a'), agent('b', { pane: 'w2:p1' })]
+    const { slots } = layout(agents, {
+      keyCount: 5,
+      macros: [{ key: 4, label: 'Deploy', action: { type: 'command', run: 'true' } }],
+    })
+    expect(slots[4]).toEqual({
+      kind: 'macro',
+      label: 'Deploy',
+      color: null,
+      action: { type: 'command', run: 'true' },
+    })
+    // agents still flow into the other free keys
+    expect(shape(slots)).toEqual(['a', 'b', '.', '.', 'mac'])
+  })
+
+  test('a macro key is reserved: agents never flow into it', () => {
+    const agents = [agent('a'), agent('b', { pane: 'w2:p1' }), agent('c', { pane: 'w3:p1' })]
+    const { slots } = layout(agents, { keyCount: 4, macros: [{ key: 1, label: 'X', action: { type: 'command', run: 'true' } }] })
+    // three agents, 3 free keys -> all fit, but key 1 stays the macro
+    expect(slots[1]?.kind).toBe('macro')
+    expect(shape(slots)).toEqual(['a', 'mac', 'b', 'c'])
+  })
+
+  test('a macro key is never evicted by overflow', () => {
+    const agents = Array.from({ length: 6 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    const { slots } = layout(agents, {
+      keyCount: 5,
+      macros: [{ key: 4, label: 'X', action: { type: 'command', run: 'true' } }],
+    })
+    // key 4 is the macro, so overflow has to use key 3
+    expect(slots[4]).toEqual({
+      kind: 'macro',
+      label: 'X',
+      color: null,
+      action: { type: 'command', run: 'true' },
+    })
+  })
+
+  test('duplicate macros for one key: the first wins', () => {
+    const { slots } = layout([], {
+      keyCount: 3,
+      macros: [
+        { key: 0, label: 'first', action: { type: 'command', run: 'true' } },
+        { key: 0, label: 'second', action: { type: 'command', run: 'echo hi' } },
+      ],
+    })
+    expect(slots[0]).toEqual({
+      kind: 'macro',
+      label: 'first',
+      color: null,
+      action: { type: 'command', run: 'true' },
+    })
+  })
+
+  test('macros take precedence over pins on the same key', () => {
+    const agents = [agent('a', { cwd: '/dev/a' })]
+    const { slots } = layout(agents, {
+      keyCount: 3,
+      pins: [pin(0, 'zephyr', '/dev/a')],
+      macros: [{ key: 0, label: 'M', action: { type: 'command', run: 'true' } }],
+    })
+    expect(slots[0]?.kind).toBe('macro')
+    // the pinned agent must flow elsewhere instead
+    expect(shape(slots)).toEqual(['mac', 'a', '.'])
+  })
+
+  test('out-of-range macros are ignored', () => {
+    const { slots } = layout([], {
+      keyCount: 2,
+      macros: [{ key: 99, label: 'X', action: { type: 'command', run: 'true' } }],
+    })
+    expect(shape(slots)).toEqual(['.', '.'])
+  })
+})
+
 describe('config', () => {
   test('empty config yields defaults with no complaints', () => {
     const { config, warnings } = parseConfig('')
@@ -268,5 +353,99 @@ cwd = "/dev/ok"
     parseConfig('[colors]\nidle = "#123456"')
     const { config } = parseConfig('')
     expect(config.theme.statusColors.idle).toBe('#22c55e')
+  })
+
+  test('reads a command macro with colour', () => {
+    const { config, warnings } = parseConfig(`
+[[macros]]
+key     = 14
+label   = "Deploy"
+color   = "#8b5cf6"
+
+[macros.action]
+type = "command"
+run  = "/usr/local/bin/deploy"
+`)
+    expect(warnings).toEqual([])
+    expect(config.macros).toEqual([
+      {
+        key: 14,
+        label: 'Deploy',
+        color: '#8b5cf6',
+        action: { type: 'command', run: '/usr/local/bin/deploy' },
+      },
+    ])
+  })
+
+  test('macro without colour gets undefined, not an error', () => {
+    const { config, warnings } = parseConfig(`
+[[macros]]
+key   = 1
+label = "X"
+
+[macros.action]
+type = "command"
+run  = "echo hi"
+`)
+    expect(warnings).toEqual([])
+    expect(config.macros[0]?.color).toBe(undefined)
+  })
+
+  test('skips an incomplete macro but keeps valid ones', () => {
+    const { config, warnings } = parseConfig(`
+[[macros]]
+key = 0
+label = "bad"
+
+[macros.action]
+type = "command"
+
+[[macros]]
+key = 2
+label = "ok"
+
+[macros.action]
+type = "app"
+app = "Finder"
+`)
+    expect(config.macros).toEqual([
+      { key: 2, label: 'ok', color: undefined, action: { type: 'app', app: 'Finder' } },
+    ])
+    expect(warnings[0]).toMatch(/run/)
+  })
+
+  test('warns on unknown action type and bad colour', () => {
+    const { config, warnings } = parseConfig(`
+[[macros]]
+key   = 3
+label = "X"
+color = "red"
+
+[macros.action]
+type = "teleport"
+`)
+    expect(config.macros).toEqual([])
+    expect(warnings.join(' ')).toMatch(/type must be one of command, url, app/)
+    expect(warnings.join(' ')).toMatch(/#rrggbb/)
+  })
+
+  test('treats duplicate macro keys as a warning', () => {
+    const { config, warnings } = parseConfig(`
+[[macros]]
+key   = 0
+label = "a"
+[macros.action]
+type = "command"
+run  = "true"
+
+[[macros]]
+key   = 0
+label = "b"
+[macros.action]
+type = "command"
+run  = "false"
+`)
+    expect(config.macros).toHaveLength(1)
+    expect(warnings[0]).toMatch(/duplicate/)
   })
 })

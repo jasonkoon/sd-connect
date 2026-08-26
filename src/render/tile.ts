@@ -23,6 +23,10 @@ export function slotKey(slot: Slot): string {
   switch (slot.kind) {
     case 'empty':
       return slot.pinned ? 'pinned-empty' : 'empty'
+    case 'macro':
+      // Macros are static per config, so the configured label + colour fully
+      // identify the tile.
+      return `macro:${slot.label}:${slot.color ?? ''}`
     case 'overflow':
       return `overflow:${slot.count}`
     case 'agent': {
@@ -116,6 +120,36 @@ export class TileRenderer {
 
     ctx.fillStyle = t.background
     ctx.fillRect(0, 0, ICON_SIZE, ICON_SIZE)
+
+    if (slot.kind === 'macro') {
+      const accent = slot.color ?? t.macroColor
+      // Accent bar across the top plus a filled label, so a macro reads as
+      // something you press rather than something you read at a glance.
+      ctx.fillStyle = accent
+      ctx.fillRect(0, 0, ICON_SIZE, t.barHeight)
+
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'alphabetic'
+      const fitted = fitText(ctx, slot.label, {
+        maxWidth: MAX_TEXT_WIDTH,
+        singleLineSizes: REPO_SINGLE_SIZES,
+        twoLineSizes: REPO_TWO_LINE_SIZES,
+        weight: 'bold',
+        family: t.fontFamily,
+        comfortableSize: REPO_COMFORTABLE_SIZE,
+      })
+      ctx.fillStyle = '#ffffff'
+      const lineHeight = fitted.fontSize + 2
+      const blockHeight = lineHeight * fitted.lines.length
+      const regionTop = t.barHeight
+      const regionBottom = SESSION_BASELINE - SESSION_SIZE - 2
+      const firstBaseline =
+        regionTop + (regionBottom - regionTop - blockHeight) / 2 + fitted.fontSize
+      fitted.lines.forEach((line, i) => {
+        ctx.fillText(line, ICON_SIZE / 2, firstBaseline + i * lineHeight)
+      })
+      return this.#toRgb()
+    }
 
     if (slot.kind === 'overflow') {
       ctx.fillStyle = t.overflowColor
