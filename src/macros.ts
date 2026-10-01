@@ -16,6 +16,35 @@ import type { MacroAction } from './types.ts'
 /** Whether a command is currently in flight, keyed by the macro's key. */
 const inFlight = new Set<number>()
 
+/** A key -> phase change for a macro: it started or finished running. */
+export type MacroPhase = 'started' | 'finished'
+
+export type MacroStatusListener = (key: number, phase: MacroPhase) => void
+
+const statusListeners: MacroStatusListener[] = []
+
+/**
+ * Subscribe to macro start/finish so a sink can show "running" feedback.
+ * Returns an unsubscribe function.
+ */
+export function onMacroStatus(listener: MacroStatusListener): () => void {
+  statusListeners.push(listener)
+  return () => {
+    const i = statusListeners.indexOf(listener)
+    if (i !== -1) statusListeners.splice(i, 1)
+  }
+}
+
+function notify(key: number, phase: MacroPhase): void {
+  for (const listener of statusListeners) {
+    try {
+      listener(key, phase)
+    } catch {
+      // A listener must not break the run.
+    }
+  }
+}
+
 export type MacroRunner = (action: MacroAction, key: number) => void
 
 /**
@@ -31,6 +60,7 @@ export function runMacroAction(action: MacroAction, key: number): boolean {
   switch (action.type) {
     case 'command': {
       inFlight.add(key)
+      notify(key, 'started')
       // Detached so the child is not tied to our process group / pipes; the
       // daemon does not wait on it. stdio ignored so it cannot block on us.
       const child = spawn('/bin/zsh', ['-c', action.run], {
@@ -40,10 +70,12 @@ export function runMacroAction(action: MacroAction, key: number): boolean {
       child.unref()
       child.once('error', (error) => {
         inFlight.delete(key)
+        notify(key, 'finished')
         console.error(`[sd-connect] macro key ${key} failed to start: ${error.message}`)
       })
       child.once('exit', (code, signal) => {
         inFlight.delete(key)
+        notify(key, 'finished')
         console.log(
           `[sd-connect] macro key ${key} finished (${signal ? `signal ${signal}` : `exit ${code ?? '?'}`})`,
         )
@@ -60,5 +92,7 @@ export function runMacroAction(action: MacroAction, key: number): boolean {
 }
 
 async function openAction(kind: 'url' | 'app', target: string, key: number): Promise<void> {
+  // Not started-then-finished for the reserved kinds: they go straight to a
+  // warning, so there is nothing to show running.
   console.warn(`[sd-connect] macro key ${key}: '${kind}' actions are not implemented yet`)
 }

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
 import { KEY_COUNT } from '../../deck.ts'
 import type { Frame } from '../../frame.ts'
+import { runMacroAction } from '../../macros.ts'
 import { TileRenderer } from '../../render/tile.ts'
 import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../../types.ts'
 import { WebSink } from './server.ts'
@@ -148,6 +149,31 @@ describe('WebSink', () => {
     assert.equal(view.keys[1].pressable, false, 'pinned-empty is not pressable')
     assert.equal(view.keys[2].pressable, false, 'overflow is not pressable')
     assert.equal(view.keys[3].pressable, false, 'empty is not pressable')
+  })
+
+  test('a macro key is pressable and reports running while in flight', async () => {
+    const s = await sink()
+    await s.present(
+      frameOf([
+        { kind: 'macro', label: 'Deploy', color: null, action: { type: 'command', run: 'sleep 0.2' } },
+      ]),
+    )
+
+    const events = eventStream(s.url)
+    const first = await events.next()
+    assert.equal(first.keys[0].pressable, true, 'macro key should be pressable')
+    assert.equal(first.keys[0].running, false, 'not running before a press')
+
+    // Triggering the macro flips the key to running, then back to idle.
+    assert.equal(runMacroAction({ type: 'command', run: 'sleep 0.2' }, 0), true)
+    const running = await events.next()
+    assert.equal(running.keys[0].running, true, 'should report running after start')
+
+    // After the command finishes the key clears.
+    const idle = await events.next()
+    assert.equal(idle.keys[0].running, false, 'should clear once the command exits')
+
+    await events.close()
   })
 
   test('pressing an agent key invokes the handler with that agent', async () => {

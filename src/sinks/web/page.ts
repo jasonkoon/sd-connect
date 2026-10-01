@@ -72,13 +72,23 @@ export const PAGE = `<!doctype html>
     animation: fade .4s ease-out forwards;
   }
   @keyframes fade { to { opacity: 0; } }
+  /* A running macro: pulsing ring so it reads as busy at a glance. */
+  .key.running { box-shadow: inset 0 0 0 3px #22c55e; }
+  .key.running::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(34,197,94,.25);
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .4; } }
   #status { display: flex; align-items: center; gap: 8px; height: 16px; }
   #dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
   #dot.on { background: #22c55e; }
   #dot.off { background: #ef4444; }
   #msg { color: #8a90a0; }
   @media (prefers-reduced-motion: reduce) {
-    .key, .key.flash::after { transition: none; animation: none; }
+    .key, .key.flash::after, .key.running::before { transition: none; animation: none; }
   }
 </style>
 </head>
@@ -120,7 +130,8 @@ function render(frame) {
       img.alt = key.label || '';
     }
     el.classList.toggle('live', key.pressable);
-    el.setAttribute('aria-label', key.label || 'empty key');
+    el.classList.toggle('running', !!key.running);
+    el.setAttribute('aria-label', (key.label || 'empty key') + (key.running ? ' (running)' : ''));
     el.disabled = !key.pressable;
     el.onclick = key.pressable ? () => press(i, el) : null;
   });

@@ -19,6 +19,7 @@ import type { Frame, Sink } from '../../frame.ts'
 import { KEY_COLUMNS } from '../../deck.ts'
 import { toPng } from '../../render/png.ts'
 import { slotKey } from '../../render/tile.ts'
+import { onMacroStatus } from '../../macros.ts'
 import type { Agent, MacroAction, Slot } from '../../types.ts'
 import { PAGE } from './page.ts'
 
@@ -52,6 +53,8 @@ interface KeyView {
   tile: string
   label: string
   pressable: boolean
+  /** True while a macro on this key is running. */
+  running: boolean
 }
 
 interface FrameView {
@@ -97,8 +100,11 @@ export class WebSink implements Sink {
   #view: FrameView | null = null
   /** Tile id -> PNG bytes, for the current frame plus whatever is still cached. */
   #pngs = new Map<string, Buffer>()
+  /** Keys that currently have a macro running. */
+  #running = new Set<number>()
   #keepalive: ReturnType<typeof setInterval> | null = null
   #started = false
+  #unsubscribeMacroStatus: (() => void) | null = null
 
   constructor(options: WebSinkOptions = {}) {
     this.#port = options.port ?? DEFAULT_PORT
@@ -107,6 +113,11 @@ export class WebSink implements Sink {
     this.#onPress = options.onPress
     this.#onMacro = options.onMacro
     this.#verbose = options.verbose ?? false
+    this.#unsubscribeMacroStatus = onMacroStatus((key, phase) => {
+      if (phase === 'started') this.#running.add(key)
+      else this.#running.delete(key)
+      this.#refreshRunning()
+    })
     this.#server = createServer((req, res) => void this.#handle(req, res))
   }
 
@@ -167,7 +178,12 @@ export class WebSink implements Sink {
         const tile = frame.tiles[i]
         if (tile) pngs.set(id, this.#pngs.get(id) ?? toPng(tile))
       }
-      return { tile: id, label: labelFor(slot), pressable: slot.kind === 'agent' || slot.kind === 'macro' }
+      return {
+        tile: id,
+        label: labelFor(slot),
+        pressable: slot.kind === 'agent' || slot.kind === 'macro',
+        running: slot.kind === 'macro' && this.#running.has(i),
+      }
     })
     this.#pngs = pngs
     this.#view = { keys, columns: this.#columns, dropped: frame.dropped.length }
@@ -175,7 +191,21 @@ export class WebSink implements Sink {
     this.#broadcast(this.#view)
   }
 
+  /** Re-broadcast the current view with refreshed "running" flags. */
+  #refreshRunning(): void {
+    if (!this.#frame || !this.#view) return
+    const keys: KeyView[] = this.#view.keys.map((key, i) => {
+      const slot = this.#frame!.slots[i]
+      const isMacro = slot?.kind === 'macro'
+      return { ...key, running: isMacro && this.#running.has(i) }
+    })
+    this.#view = { ...this.#view, keys }
+    this.#broadcast(this.#view)
+  }
+
   async stop(): Promise<void> {
+    this.#unsubscribeMacroStatus?.()
+    this.#unsubscribeMacroStatus = null
     if (this.#keepalive) clearInterval(this.#keepalive)
     this.#keepalive = null
     for (const client of this.#clients) client.end()
