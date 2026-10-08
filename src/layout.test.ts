@@ -29,18 +29,20 @@ function shape(slots: readonly Slot[]): string[] {
       ? s.agent.repo
       : s.kind === 'overflow'
         ? `+${s.count}`
-        : s.kind === 'macro'
-          ? 'mac'
-          : '.',
+        : s.kind === 'page'
+          ? 'back'
+          : s.kind === 'macro'
+            ? 'mac'
+            : '.',
   )
 }
 
 describe('layout: auto-flow', () => {
   test('fills keys in the order given', () => {
     const agents = [agent('a'), agent('b', { pane: 'w2:p1' }), agent('c', { pane: 'w3:p1' })]
-    const { slots, dropped } = layout(agents, { keyCount: 5 })
+    const { slots, pageCount } = layout(agents, { keyCount: 5 })
     expect(shape(slots)).toEqual(['a', 'b', 'c', '.', '.'])
-    expect(dropped).toEqual([])
+    expect(pageCount).toBe(1)
   })
 
   test('no agents leaves every key blank', () => {
@@ -50,25 +52,51 @@ describe('layout: auto-flow', () => {
 
   test('exactly filling the deck does not create an overflow tile', () => {
     const agents = Array.from({ length: 5 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
-    const { slots, dropped } = layout(agents, { keyCount: 5 })
+    const { slots, pageCount } = layout(agents, { keyCount: 5 })
     expect(shape(slots)).toEqual(['r0', 'r1', 'r2', 'r3', 'r4'])
-    expect(dropped).toEqual([])
+    expect(pageCount).toBe(1)
   })
 })
 
-describe('layout: overflow', () => {
-  test('reserves the last key and reports the right count', () => {
-    // 7 agents, 5 keys: 4 shown + 1 overflow tile covering the other 3.
+describe('layout: pages', () => {
+  test('the overflow tile is pressable navigation, and nothing is evicted', () => {
+    // 7 agents, 5 keys: 4 shown + a +3 tile that opens page 2.
     const agents = Array.from({ length: 7 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
-    const { slots, dropped } = layout(agents, { keyCount: 5 })
-    expect(slots[4]).toEqual({ kind: 'overflow', count: 3 })
-    expect(dropped).toHaveLength(3)
-    // The count on the tile must match what was actually dropped.
-    const overflow = slots[4] as { kind: 'overflow'; count: number }
-    expect(overflow.count).toBe(dropped.length)
+    const { slots, pageCount } = layout(agents, { keyCount: 5 })
+    expect(shape(slots)).toEqual(['r0', 'r1', 'r2', 'r3', '+3'])
+    expect(pageCount).toBe(2)
   })
 
-  test('keeps blocked and done, drops idle and unknown first', () => {
+  test('page 2 shows the rest and a back tile in the first key', () => {
+    const agents = Array.from({ length: 7 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    const { slots, pageCount } = layout(agents, { keyCount: 5, page: 1 })
+    expect(shape(slots)).toEqual(['back', 'r4', 'r5', 'r6', '.'])
+    expect(pageCount).toBe(2)
+  })
+
+  test('page 2 is laid out from where page 1 stopped, in the same order', () => {
+    // 11 agents: page 1 shows r0-r3 + overflow, page 2 r4-r6 + overflow, page 3 r7-r10.
+    const agents = Array.from({ length: 11 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    expect(layout(agents, { keyCount: 5 }).pageCount).toBe(3)
+    expect(shape(layout(agents, { keyCount: 5, page: 1 }).slots)).toEqual(['back', 'r4', 'r5', 'r6', '+4'])
+    expect(shape(layout(agents, { keyCount: 5, page: 2 }).slots)).toEqual(['back', 'r7', 'r8', 'r9', 'r10'])
+  })
+
+  test('a page request past the end clamps to the last page', () => {
+    const agents = Array.from({ length: 7 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    const { slots } = layout(agents, { keyCount: 5, page: 9 })
+    expect(shape(slots)).toEqual(['back', 'r4', 'r5', 'r6', '.'])
+  })
+
+  test('the overflow count always matches the agents held on later pages', () => {
+    const agents = Array.from({ length: 7 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    const first = layout(agents, { keyCount: 5 })
+    const overflow = first.slots[4] as { kind: 'overflow'; count: number }
+    const onOtherPages = agents.length - first.slots.filter((s) => s.kind === 'agent').length
+    expect(overflow.count).toBe(onOtherPages)
+  })
+
+  test('no eviction: agents that do not fit are paged, never hidden', () => {
     const agents = [
       agent('idle1', { status: 'idle', pane: 'w1:p1' }),
       agent('unknown1', { status: 'unknown', pane: 'w2:p1' }),
@@ -76,11 +104,10 @@ describe('layout: overflow', () => {
       agent('working1', { status: 'working', pane: 'w4:p1' }),
       agent('done1', { status: 'done', pane: 'w5:p1' }),
     ]
-    // 3 keys: 2 agents + overflow tile.
-    const { slots, dropped } = layout(agents, { keyCount: 3 })
-    const shown = shape(slots).filter((s) => s !== '.' && !s.startsWith('+'))
-    expect(shown).toEqual(['blocked1', 'done1'])
-    expect(dropped.map((d) => d.repo).sort()).toEqual(['idle1', 'unknown1', 'working1'])
+    // 3 keys: page 1 shows 2 + overflow; later pages show the remaining 3.
+    expect(shape(layout(agents, { keyCount: 3 }).slots)).toEqual(['idle1', 'unknown1', '+3'])
+    expect(shape(layout(agents, { keyCount: 3, page: 1 }).slots)).toEqual(['back', 'blocked1', '+2'])
+    expect(layout(agents, { keyCount: 3 }).pageCount).toBe(3)
   })
 
   test('survivors stay in display order, not priority order', () => {
@@ -94,22 +121,30 @@ describe('layout: overflow', () => {
     expect(shape(slots)).toEqual(['aaa', 'bbb', 'zzz'])
   })
 
-  test('among equal statuses the later agent is dropped', () => {
+  test('with fewer than 3 free keys there is no pagination, only an honest overflow tile', () => {
     const agents = [
       agent('first', { status: 'idle', pane: 'w1:p1' }),
       agent('second', { status: 'idle', pane: 'w2:p1' }),
       agent('third', { status: 'idle', pane: 'w3:p1' }),
     ]
-    const { slots, dropped } = layout(agents, { keyCount: 2 })
-    expect(shape(slots)).toEqual(['first', '+2'])
-    expect(dropped.map((d) => d.repo)).toEqual(['second', 'third'])
+    // A back tile plus an agent cannot share 2 keys; clamping keeps it safe.
+    expect(shape(layout(agents, { keyCount: 2 }).slots)).toEqual(['first', '+2'])
+    expect(shape(layout(agents, { keyCount: 2, page: 1 }).slots)).toEqual(['first', '+2'])
+    expect(layout(agents, { keyCount: 2, page: 1 }).pageCount).toBe(1)
   })
 
-  test('a single key with several agents still shows a sane frame', () => {
+  test('a single free key shows what fits and cannot page (a back tile would strand it)', () => {
     const agents = [agent('a'), agent('b', { pane: 'w2:p1' })]
-    const { slots, dropped } = layout(agents, { keyCount: 1 })
-    expect(slots[0]).toEqual({ kind: 'overflow', count: 2 })
-    expect(dropped).toHaveLength(2)
+    const { slots, pageCount } = layout(agents, { keyCount: 1 })
+    expect(shape(slots)).toEqual(['+2'])
+    expect(pageCount).toBe(1)
+  })
+
+  test('every agent fits: no overflow tile, one page', () => {
+    const agents = Array.from({ length: 14 }, (_, i) => agent(`r${i}`, { pane: `w${i}:p1` }))
+    const { slots, pageCount } = layout(agents, { keyCount: 15 })
+    expect(pageCount).toBe(1)
+    expect(shape(slots).filter((s) => s !== '.')).toHaveLength(14)
   })
 })
 
@@ -139,6 +174,19 @@ describe('layout: pins', () => {
     expect(first.agent.session).toBe('beta')
   })
 
+  test('a "*" session pin matches whatever session holds the repo', () => {
+    const agents = [agent('a', { session: 'whatever', cwd: '/dev/a' })]
+    const { slots } = layout(agents, { keyCount: 2, pins: [pin(0, '*', '/dev/a')] })
+    expect(shape(slots)).toEqual(['a', '.'])
+  })
+
+  test('a pin follows the agent when its cwd drifts into a subdirectory', () => {
+    // Restarted inside a subdir: the repo label is what stays stable.
+    const agents = [agent('a', { session: 'drifted', cwd: '/dev/a/sub/dir' })]
+    const { slots } = layout(agents, { keyCount: 2, pins: [pin(0, 'drifted', '/dev/a')] })
+    expect(shape(slots)).toEqual(['a', '.'])
+  })
+
   test('ignores a trailing slash difference', () => {
     const agents = [agent('a', { cwd: '/dev/a' })]
     const { slots } = layout(agents, { keyCount: 2, pins: [pin(1, 'zephyr', '/dev/a/')] })
@@ -156,9 +204,9 @@ describe('layout: pins', () => {
       agent('dup', { cwd: '/dev/dup', pane: 'w1:p1' }),
       agent('dup', { cwd: '/dev/dup', pane: 'w1:p2' }),
     ]
-    const { slots, dropped } = layout(agents, { keyCount: 3, pins: [pin(2, 'zephyr', '/dev/dup')] })
+    const { slots, pageCount } = layout(agents, { keyCount: 3, pins: [pin(2, 'zephyr', '/dev/dup')] })
     expect(shape(slots)).toEqual(['dup', '.', 'dup'])
-    expect(dropped).toEqual([])
+    expect(pageCount).toBe(1)
   })
 
   test('out-of-range pins are ignored rather than fatal', () => {
@@ -187,20 +235,22 @@ describe('layout: pins', () => {
       agent('z', { pane: 'w4:p1', status: 'idle' }),
     ]
     // 3 keys, one reserved by a pin -> 2 free -> 1 agent + overflow.
-    const { slots, dropped } = layout(agents, {
+    // Two free keys cannot host back + forward + an agent, so it does not
+    // paginate: the +1 tile honestly reports what is not shown.
+    const { slots, pageCount } = layout(agents, {
       keyCount: 3,
       pins: [pin(1, 'zephyr', '/dev/pinned')],
     })
     expect(shape(slots)).toEqual(['x', 'pinned', '+2'])
-    expect(dropped.map((d) => d.repo)).toEqual(['y', 'z'])
+    expect(pageCount).toBe(1)
   })
 
   test('every key pinned leaves nowhere for others to flow', () => {
     const agents = [agent('a', { cwd: '/dev/a' }), agent('b', { cwd: '/dev/b', pane: 'w2:p1' })]
-    const { slots, dropped } = layout(agents, { keyCount: 1, pins: [pin(0, 'zephyr', '/dev/a')] })
+    const { slots, pageCount } = layout(agents, { keyCount: 1, pins: [pin(0, 'zephyr', '/dev/a')] })
     expect(shape(slots)).toEqual(['a'])
     // 'b' has nowhere to go and there is no free key for an overflow tile.
-    expect(dropped.map((d) => d.repo)).toEqual(['b'])
+    expect(pageCount).toBe(1)
   })
 })
 

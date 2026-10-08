@@ -159,7 +159,7 @@ function connect() {
     const frame = JSON.parse(e.data);
     render(frame);
     const n = frame.keys.filter((k) => k.pressable).length;
-    const extra = frame.dropped ? ' (+' + frame.dropped + ' not shown)' : '';
+    const extra = frame.dropped ? ' (+' + frame.dropped + ' on other pages)' : '';
     setStatus('on', n + (n === 1 ? ' agent' : ' agents') + extra);
   };
   // EventSource reconnects on its own; this only reports the gap. A daemon

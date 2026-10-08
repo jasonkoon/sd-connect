@@ -44,6 +44,8 @@ export interface WebSinkOptions {
   onPress?: (agent: Agent) => void | Promise<void>
   /** Invoked when a macro key is clicked. */
   onMacro?: (key: number, action: MacroAction) => void | Promise<void>
+  /** Invoked when a page-navigation tile is clicked. */
+  onPage?: (direction: 'forward' | 'back') => void
   verbose?: boolean
 }
 
@@ -70,7 +72,9 @@ function labelFor(slot: Slot): string {
     case 'macro':
       return `${slot.label} — macro`
     case 'overflow':
-      return `${slot.count} more not shown`
+      return `${slot.count} more — page 2`
+    case 'page':
+      return 'back a page'
     case 'agent':
       return `${slot.agent.repo} — ${slot.agent.status} — ${slot.agent.session}`
   }
@@ -94,6 +98,7 @@ export class WebSink implements Sink {
   #columns: number
   #onPress: WebSinkOptions['onPress']
   #onMacro: WebSinkOptions['onMacro']
+  #onPage: WebSinkOptions['onPage']
   #verbose: boolean
   #clients = new Set<ServerResponse>()
   #frame: Frame | null = null
@@ -112,6 +117,7 @@ export class WebSink implements Sink {
     this.#columns = options.columns ?? KEY_COLUMNS
     this.#onPress = options.onPress
     this.#onMacro = options.onMacro
+    this.#onPage = options.onPage
     this.#verbose = options.verbose ?? false
     this.#unsubscribeMacroStatus = onMacroStatus((key, phase) => {
       if (phase === 'started') this.#running.add(key)
@@ -181,7 +187,7 @@ export class WebSink implements Sink {
       return {
         tile: id,
         label: labelFor(slot),
-        pressable: slot.kind === 'agent' || slot.kind === 'macro',
+        pressable: slot.kind === 'agent' || slot.kind === 'macro' || slot.kind === 'page' || slot.kind === 'overflow',
         running: slot.kind === 'macro' && this.#running.has(i),
       }
     })
@@ -321,6 +327,10 @@ export class WebSink implements Sink {
     if (slot.kind === 'macro') {
       void this.#onMacro?.(index, slot.action)
       return json(200, { ok: true, label: slot.label })
+    }
+    if (slot.kind === 'page' || slot.kind === 'overflow') {
+      void this.#onPage?.(slot.kind === 'page' ? 'back' : 'forward')
+      return json(200, { ok: true, label: slot.kind === 'page' ? 'back' : `+${slot.count}` })
     }
     return json(400, { error: 'key has no pressable action' })
   }

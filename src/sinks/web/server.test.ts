@@ -142,13 +142,15 @@ describe('WebSink', () => {
         { kind: 'agent', agent: agent('portal') },
         PINNED_EMPTY_SLOT,
         { kind: 'overflow', count: 3 },
+        { kind: 'page', direction: 'back' },
       ]),
     )
     const view = await firstEvent(s.url)
     assert.equal(view.keys[0].pressable, true)
     assert.equal(view.keys[1].pressable, false, 'pinned-empty is not pressable')
-    assert.equal(view.keys[2].pressable, false, 'overflow is not pressable')
-    assert.equal(view.keys[3].pressable, false, 'empty is not pressable')
+    assert.equal(view.keys[2].pressable, true, 'overflow opens the next page')
+    assert.equal(view.keys[3].pressable, true, 'the back tile is pressable')
+    assert.equal(view.keys[4].pressable, false, 'empty is not pressable')
   })
 
   test('a macro key is pressable and reports running while in flight', async () => {
@@ -189,6 +191,23 @@ describe('WebSink', () => {
     assert.equal(pressed.length, 1)
     assert.equal(pressed[0]?.repo, 'sd-connect')
     assert.equal(pressed[0]?.session, 'koon')
+  })
+
+  test('pressing an overflow tile asks for the next page', async () => {
+    let pages = 0
+    const s = await sink({ onPage: () => void pages++ })
+    await s.present(
+      frameOf([
+        { kind: 'agent', agent: agent('portal') },
+        { kind: 'overflow', count: 2 },
+        { kind: 'page', direction: 'back' },
+      ]),
+    )
+    const overflow = await fetch(`${s.url}/press/1`, { method: 'POST' })
+    assert.equal(overflow.status, 200)
+    const back = await fetch(`${s.url}/press/2`, { method: 'POST' })
+    assert.equal(back.status, 200)
+    assert.equal(pages, 2)
   })
 
   test('pressing an empty key is rejected and never reaches the handler', async () => {

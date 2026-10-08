@@ -23,6 +23,8 @@ export interface DeckSinkOptions {
   onPress?: (agent: Agent) => void
   /** Invoked when a macro key is released. */
   onMacro?: (key: number, action: MacroAction) => void
+  /** Invoked when a page-navigation tile is released. */
+  onPage?: (direction: 'forward' | 'back') => void
 }
 
 export class DeckSink implements Sink {
@@ -33,6 +35,7 @@ export class DeckSink implements Sink {
   #verbose: boolean
   #onPress: ((agent: Agent) => void) | null
   #onMacro: ((key: number, action: MacroAction) => void) | null
+  #onPage: (() => void) | null
   #lastFrame: Frame | null = null
   #reconnecting = false
   #stopped = false
@@ -42,6 +45,7 @@ export class DeckSink implements Sink {
     this.#verbose = options.verbose
     this.#onPress = options.onPress ?? null
     this.#onMacro = options.onMacro ?? null
+    this.#onPage = options.onPage ?? null
   }
 
   get connected(): boolean {
@@ -70,6 +74,14 @@ export class DeckSink implements Sink {
     return slot?.kind === 'macro' ? { key: index, action: slot.action } : null
   }
 
+  isOverflowAt(index: number): boolean {
+    return this.#lastFrame?.slots[index]?.kind === 'overflow'
+  }
+
+  isBackAt(index: number): boolean {
+    return this.#lastFrame?.slots[index]?.kind === 'page'
+  }
+
   async connect(): Promise<boolean> {
     try {
       const deck = await openDeck({ brightness: this.#brightness })
@@ -87,6 +99,8 @@ export class DeckSink implements Sink {
         const macro = this.macroAt(index)
         if (agent) this.#onPress?.(agent)
         else if (macro) this.#onMacro?.(macro.key, macro.action)
+        else if (this.isOverflowAt(index)) this.#onPage?.('forward')
+        else if (this.isBackAt(index)) this.#onPage?.('back')
       })
       this.#deck = deck
       console.log(`[sd-connect] deck connected: ${deck.device.MODEL}, ${deck.keyCount} keys`)
@@ -119,7 +133,7 @@ export class DeckSink implements Sink {
       // rotated, and an agent flipping between working and idle all day would
       // otherwise grow it forever. Presses and failures are always logged.
       if (this.#verbose && written > 0) {
-        const extra = frame.dropped.length > 0 ? ` (+${frame.dropped.length} not shown)` : ''
+        const extra = frame.dropped.length > 0 ? ` (+${frame.dropped.length} on other pages)` : ''
         console.log(`[sd-connect] ${written} key(s) updated: ${describe(frame)}${extra}`)
       }
     } catch (error) {
@@ -175,6 +189,7 @@ function describe(frame: Frame): string {
     .map((slot, i) => {
       if (slot.kind === 'empty') return null
       if (slot.kind === 'overflow') return `${i}:+${slot.count}`
+      if (slot.kind === 'page') return `${i}:back`
       if (slot.kind === 'macro') return `${i}:macro[${slot.label}]`
       return `${i}:${slot.agent.repo}(${slot.agent.status})`
     })

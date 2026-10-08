@@ -19,6 +19,8 @@ export interface AmpGd6SinkOptions {
   verbose: boolean
   onPress?: (agent: Agent) => void
   onMacro?: (key: number, action: MacroAction) => void
+  /** Invoked when a page-navigation tile is released. */
+  onPage?: (direction: 'forward' | 'back') => void
 }
 
 export class AmpGd6Sink implements Sink {
@@ -29,6 +31,7 @@ export class AmpGd6Sink implements Sink {
   #verbose: boolean
   #onPress: ((agent: Agent) => void) | null
   #onMacro: ((key: number, action: MacroAction) => void) | null
+  #onPage: (() => void) | null
   #lastFrame: Frame | null = null
   #reconnecting = false
   #stopped = false
@@ -38,6 +41,7 @@ export class AmpGd6Sink implements Sink {
     this.#verbose = options.verbose
     this.#onPress = options.onPress ?? null
     this.#onMacro = options.onMacro ?? null
+    this.#onPage = options.onPage ?? null
   }
 
   get connected(): boolean {
@@ -58,6 +62,14 @@ export class AmpGd6Sink implements Sink {
     return slot?.kind === 'macro' ? { key: index, action: slot.action } : null
   }
 
+  isOverflowAt(index: number): boolean {
+    return this.#lastFrame?.slots[index]?.kind === 'overflow'
+  }
+
+  isBackAt(index: number): boolean {
+    return this.#lastFrame?.slots[index]?.kind === 'page'
+  }
+
   async connect(): Promise<boolean> {
     try {
       const device = await AmpGd6.open({ brightness: this.#brightness })
@@ -70,6 +82,8 @@ export class AmpGd6Sink implements Sink {
         const macro = this.macroAt(index)
         if (agent) this.#onPress?.(agent)
         else if (macro) this.#onMacro?.(macro.key, macro.action)
+        else if (this.isOverflowAt(index)) this.#onPage?.('forward')
+        else if (this.isBackAt(index)) this.#onPage?.('back')
       })
       this.#device = device
       console.log(`[sd-connect] ampgd6 connected: ${device.keyCount} keys`)

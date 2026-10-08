@@ -29,6 +29,8 @@ export function slotKey(slot: Slot): string {
       return `macro:${slot.label}:${slot.color ?? ''}`
     case 'overflow':
       return `overflow:${slot.count}`
+    case 'page':
+      return `page:${slot.direction}`
     case 'agent': {
       const a = slot.agent
       return `agent:${a.status}:${a.repo}:${a.session}`
@@ -153,13 +155,24 @@ export class TileRenderer {
 
     if (slot.kind === 'overflow') {
       ctx.fillStyle = t.overflowColor
-      ctx.font = `bold 20px ${t.fontFamily}`
+      ctx.font = `bold 22px ${t.fontFamily}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'alphabetic'
-      ctx.fillText(`+${slot.count}`, ICON_SIZE / 2, 40)
+      ctx.fillText(`+${slot.count}`, ICON_SIZE / 2, 36)
       ctx.fillStyle = t.sessionColor
       ctx.font = `${SESSION_SIZE}px ${t.fontFamily}`
-      ctx.fillText('more', ICON_SIZE / 2, 56)
+      ctx.fillText('more ›', ICON_SIZE / 2, 56)
+      return this.#toRgb()
+    }
+
+    if (slot.kind === 'page') {
+      // A single page turn glyph, unmistakable at 72px and impossible to
+      // confuse with an agent tile.
+      ctx.fillStyle = t.overflowColor
+      ctx.font = `bold 34px ${t.fontFamily}`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('‹', ICON_SIZE / 2, ICON_SIZE / 2)
       return this.#toRgb()
     }
 

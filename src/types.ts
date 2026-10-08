@@ -16,9 +16,8 @@ export function isAgentStatus(value: unknown): value is AgentStatus {
 }
 
 /**
- * Attention priority, ascending. Used only for overflow eviction: when there are
- * more agents than free keys, the lowest-priority ones get dropped first so that
- * `blocked` and `done` always survive.
+ * Attention priority, ascending. Not used by the paginator (which shows every
+ * agent, page by page), but kept as the canonical attention ordering.
  *
  * This is NOT the display sort order. Display order is stable (session, then
  * workspace) so keys don't shuffle under your fingers when a status changes.
@@ -88,12 +87,17 @@ export type MacroAction =
  * `empty.pinned` distinguishes a key held open by a pin whose agent is not
  * currently running from a key that is simply unused. A reserved-but-dark key
  * is the whole point of pinning, so it is drawn slightly differently.
+ *
+ * `overflow` is a pressable tile: pressing it moves to the next page, where the
+ * agents it stands for are shown. `page` is the matching tile on later pages
+ * that goes back to the previous page.
  */
 export type Slot =
   | { kind: 'empty'; pinned: boolean }
   | { kind: 'agent'; agent: Agent }
   | { kind: 'macro'; label: string; color: string | null; action: MacroAction }
   | { kind: 'overflow'; count: number }
+  | { kind: 'page'; direction: 'back' }
 
 /** A macro key as configured; becomes a `macro` slot at layout time. */
 export interface MacroConfig {

@@ -154,7 +154,10 @@ done    = "#eab308"
 unknown = "#6b7280"
 
 # Pin an agent to a fixed key, identified by session + cwd.
-# session can be a herdr session name ("zephyr"), "warp", "claude", or "pi".
+# session can be a herdr session name ("zephyr"), "warp", "claude", "pi" —
+# or "*" to match any session, which survives agents restarting under new
+# session names. Matching follows the repo too: an agent that restarts inside
+# a subdirectory of the repo still lands on its key.
 # Keys are numbered left to right, top to bottom: 0-4, 5-9, 10-14.
 # A pinned key stays dark when that agent is not running.
 [[pins]]
@@ -175,9 +178,11 @@ cwd     = "/Users/you/dev/my-project"
 
 Unpinned agents flow into whatever keys are left, in a stable order (session,
 then workspace) so they do not shuffle when a status changes. If there are more
-agents than keys, the least interesting are dropped first (unknown, then idle,
-then working) so `blocked` and `done` always survive, and the last key becomes a
-`+N more` tile.
+agents than keys, the last key becomes a `+N more ›` tile that opens the next
+page: no agent is ever dropped from view, and pages do not reshuffle when a
+status changes. A deck left with fewer than three free keys after pins and
+macros cannot host back + forward + an agent, so it keeps a plain `+N` tile
+that reports the remainder instead of paginating.
 
 ### Macro keys
 
@@ -221,6 +226,13 @@ Both herdr steps are needed because `agent.focus` alone moves focus *inside* a
 session but does not touch the window server, so focusing a `canaries` agent
 while the `zephyr` window is frontmost changes nothing you can see.
 
+Window titles do not always contain the herdr session name — Ghostty titles
+windows `hostname: repo`, for instance — so if no window title matches the
+session, a second pass matches the agent's repo (derived from the cwd herdr
+reports) in the title, case-sensitively. That fallback is what makes a repo
+named `koon` raise the window titled `hostname: koon` rather than a window
+whose hostname happens to contain the same letters.
+
 Window raising uses AppleScript UI scripting against Ghostty or Warp. That means
 it depends on:
 
@@ -233,7 +245,22 @@ to skip window raising entirely.
 
 Presses act on key *release*, so holding a key does one thing rather than
 repeating, and overlapping presses are ignored while a jump is in flight.
-Pressing an empty or `+N more` key does nothing.
+Pressing an empty key does nothing.
+
+### Pages
+
+When the agents do not all fit on one deck, the last free key shows
+`+N more ›`; pressing it (on the deck or in the viewer) turns to page 2, which
+leads with a `‹` back tile in the first key and shows the remaining agents.
+Middle pages carry both tiles: `‹` to go back, `+N ›` to go forward. Returning
+to page 1 happens only through the back tile — a page turn must not be undone
+by the next 400ms poll. The page does reset when the agent set actually
+changes (an agent appears or disappears, changing what page 1 holds), which
+lands you back on the home page exactly when the deck's contents have visibly
+moved anyway. Status changes alone never move the page.
+
+Pinned agents and macros live on page 1 only; pages 2+ are auto-flow keys and
+the navigation tiles.
 
 ## Watching agents (no hardware needed)
 

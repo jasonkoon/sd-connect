@@ -27,6 +27,7 @@ import { AmpGd6Sink } from './sinks/ampgd6-sink.ts'
 import { DeckSink } from './sinks/deck-sink.ts'
 import { WebSink } from './sinks/web/server.ts'
 import type { Agent, MacroAction } from './types.ts'
+import { agentKey } from './types.ts'
 
 interface Flags {
   once: boolean
@@ -99,6 +100,7 @@ async function main(): Promise<void> {
     verbose: flags.verbose,
     onPress: (agent) => press(agent),
     onMacro: runMacro,
+    onPage: (direction) => turnPage(direction === 'back' ? -1 : 1),
   })
 
   // Both hardware sinks are always present; each is a no-op until its own
@@ -111,6 +113,7 @@ async function main(): Promise<void> {
     verbose: flags.verbose,
     onPress: (agent) => press(agent),
     onMacro: runMacro,
+    onPage: (direction) => turnPage(direction === 'back' ? -1 : 1),
   })
 
   const sinks: Sink[] = [deckSink, ampgd6Sink]
@@ -126,6 +129,7 @@ async function main(): Promise<void> {
       portSource: flags.port !== null ? '--port' : existed ? 'config' : 'default',
       onPress: (agent) => press(agent),
       onMacro: runMacro,
+      onPage: (direction) => turnPage(direction === 'back' ? -1 : 1),
       verbose: flags.verbose,
     })
     // A viewer that cannot bind is not fatal; the deck still works without it.
@@ -155,6 +159,19 @@ async function main(): Promise<void> {
     if (!ampgd6Connected) ampgd6Sink.waitForDevice()
   }
 
+  // Which page the deck is on. It survives status-only changes, but resets to
+  // the home page when the agent set itself changes (an agent appears or
+  // disappears): the keys have visibly moved under you anyway, so page 2's
+  // contents would be a surprise rather than a continuation.
+  let page = 0
+  let lastAgentSetSig: string | null = null
+  let lastLayoutSig: string | null = null
+  let lastLoggedPage = -1
+  const turnPage = (delta: number): void => {
+    page = Math.max(0, page + delta)
+    void repaint()
+  }
+
   /**
    * Lay out and render one frame, then hand it to every sink.
    *
@@ -163,14 +180,37 @@ async function main(): Promise<void> {
    * in the viewer while unplugged, which is the whole point of having it.
    */
   const show = async (agents: Agent[]): Promise<void> => {
+    const agentSetSig = agents.map((a) => agentKey(a.session, a.paneId)).join('\n')
+    if (agentSetSig !== lastAgentSetSig) {
+      lastAgentSetSig = agentSetSig
+      page = 0
+    }
+    await repaint(agents)
+  }
+
+  const repaint = async (agents?: Agent[]): Promise<void> => {
+    const current = agents ?? latestAgents
+    if (!current) return
     const keyCount = deckSink.keyCount ?? ampgd6Sink.keyCount ?? KEY_COUNT
-    const { slots, dropped } = layout(agents, { keyCount, pins: config.pins, macros: config.macros })
+    const { slots, pageCount } = layout(current, {
+      keyCount,
+      pins: config.pins,
+      macros: config.macros,
+      page,
+    })
+    const shown = new Set(slots.filter((s) => s.kind === 'agent').map((s) => agentKey((s as { agent: Agent }).agent.session, (s as { agent: Agent }).agent.paneId)))
     const frame: Frame = {
       slots,
       tiles: slots.map((slot) => renderer.render(slot)),
-      dropped,
+      dropped: current.filter((a) => !shown.has(agentKey(a.session, a.paneId))),
       keyCount,
     }
+    const sig = JSON.stringify(slots)
+    if (pageCount > 1 && (sig !== lastLayoutSig || page !== lastLoggedPage)) {
+      lastLoggedPage = page
+      console.log(`[sd-connect] page ${page + 1}/${pageCount}`)
+    }
+    lastLayoutSig = sig
     // A sink that throws must not stop the others. Each already absorbs its own
     // transient failures, so anything reaching here is a bug worth logging.
     await Promise.all(
@@ -186,9 +226,13 @@ async function main(): Promise<void> {
     )
   }
 
+  let latestAgents: Agent[] | null = null
   const poller = new AgentPoller({
     intervalMs: config.pollIntervalMs,
-    onChange: show,
+    onChange: (agents) => {
+      latestAgents = agents
+      return show(agents)
+    },
     onSessionError: (session, error) => {
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[sd-connect] session '${session}' unavailable: ${message}`)

@@ -14,6 +14,7 @@ const RAISE_SCRIPT = `
 on run argv
   set targetSession to item 1 of argv
   set procName to item 2 of argv
+  set targetRepo to item 3 of argv
   tell application "System Events"
     set matchingProcs to (every process whose name is procName)
     if (count of matchingProcs) = 0 then return "NOPROC"
@@ -26,6 +27,22 @@ on run argv
           return "OK:" & t
         end if
       end repeat
+      -- A session's name does not always reach the window title (Ghostty
+      -- titles as "host: repo"), so fall back to the repo before giving up.
+      -- Case-sensitive: the hostname often contains the repo name in a
+      -- different case, and 'contains' is case-insensitive by default.
+      if targetRepo is not "" and targetRepo is not targetSession then
+        considering case
+          repeat with w in windows
+            set t to value of attribute "AXTitle" of w
+            if t contains targetRepo then
+              perform action "AXRaise" of w
+              set frontmost to true
+              return "OK:" & t
+            end if
+          end repeat
+        end considering
+      end if
     end tell
   end tell
   return "NOWINDOW"
@@ -126,11 +143,12 @@ export interface FocusOptions {
 export async function raiseSessionWindow(
   session: string,
   terminalProcess = TERMINAL_PROCESS,
+  repo = '',
 ): Promise<{ raised: boolean; note?: string }> {
   try {
     const { stdout } = await execFileAsync(
       'osascript',
-      ['-e', RAISE_SCRIPT, session, terminalProcess],
+      ['-e', RAISE_SCRIPT, session, terminalProcess, repo],
       { timeout: APPLESCRIPT_TIMEOUT_MS },
     )
     const output = stdout.trim()
@@ -228,7 +246,7 @@ export async function focusAgent(
   }
 
   const windowResult = shouldRaise
-    ? await raiseSessionWindow(agent.session, options.terminalProcess)
+    ? await raiseSessionWindow(agent.session, options.terminalProcess, agent.repo)
     : { raised: false, note: 'window raising disabled' }
 
   try {
