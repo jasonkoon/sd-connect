@@ -32,6 +32,7 @@ function toAgent(session: string, raw: RawAgent): Agent {
 
 function compareAgents(a: Agent, b: Agent): number {
   return (
+    a.repo.localeCompare(b.repo, undefined, { sensitivity: 'base' }) ||
     a.session.localeCompare(b.session) ||
     a.workspaceId.localeCompare(b.workspaceId, undefined, { numeric: true }) ||
     a.paneId.localeCompare(b.paneId, undefined, { numeric: true })

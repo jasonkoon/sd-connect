@@ -19,8 +19,8 @@ export function isAgentStatus(value: unknown): value is AgentStatus {
  * Attention priority, ascending. Not used by the paginator (which shows every
  * agent, page by page), but kept as the canonical attention ordering.
  *
- * This is NOT the display sort order. Display order is stable (session, then
- * workspace) so keys don't shuffle under your fingers when a status changes.
+ * This is NOT the display sort order. Display order is stable (repo, then
+ * session, workspace) so keys don't shuffle under your fingers when a status changes.
  */
 export const STATUS_PRIORITY: Record<AgentStatus, number> = {
   unknown: 0,
@@ -84,16 +84,12 @@ export type MacroAction =
 /**
  * What occupies a single Stream Deck key.
  *
- * `empty.pinned` distinguishes a key held open by a pin whose agent is not
- * currently running from a key that is simply unused. A reserved-but-dark key
- * is the whole point of pinning, so it is drawn slightly differently.
- *
  * `overflow` is a pressable tile: pressing it moves to the next page, where the
  * agents it stands for are shown. `page` is the matching tile on later pages
  * that goes back to the previous page.
  */
 export type Slot =
-  | { kind: 'empty'; pinned: boolean }
+  | { kind: 'empty' }
   | { kind: 'agent'; agent: Agent }
   | { kind: 'macro'; label: string; color: string | null; action: MacroAction }
   | { kind: 'overflow'; count: number }
@@ -109,5 +105,4 @@ export interface MacroConfig {
   action: MacroAction
 }
 
-export const EMPTY_SLOT: Slot = { kind: 'empty', pinned: false }
-export const PINNED_EMPTY_SLOT: Slot = { kind: 'empty', pinned: true }
+export const EMPTY_SLOT: Slot = { kind: 'empty' }

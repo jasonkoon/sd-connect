@@ -91,11 +91,6 @@ osascript is not allowed assistive access. (-1719)
 If you miss the prompt, grant it under
 **System Settings → Privacy & Security → Accessibility**.
 
-### 6. Optional: pin agents to fixed keys
-
-See [Configuration](#configuration). Without config, agents flow into keys
-automatically and everything still works.
-
 ### Check it is running
 
 ```sh
@@ -152,45 +147,22 @@ working = "#3b82f6"
 blocked = "#ef4444"
 done    = "#eab308"
 unknown = "#6b7280"
-
-# Pin an agent to a fixed key, identified by session + cwd.
-# session can be a herdr session name ("zephyr"), "warp", "claude", "pi" —
-# or "*" to match any session, which survives agents restarting under new
-# session names. Matching follows the repo too: an agent that restarts inside
-# a subdirectory of the repo still lands on its key.
-# Keys are numbered left to right, top to bottom: 0-4, 5-9, 10-14.
-# A pinned key stays dark when that agent is not running.
-[[pins]]
-key     = 0
-session = "zephyr"
-cwd     = "/Users/you/dev/sd-connect"
-
-[[pins]]
-key     = 1
-session = "warp"
-cwd     = "/Users/you/dev/git-agent"
-
-[[pins]]
-key     = 2
-session = "claude"
-cwd     = "/Users/you/dev/my-project"
 ```
 
-Unpinned agents flow into whatever keys are left, in a stable order (session,
-then workspace) so they do not shuffle when a status changes. If there are more
+Agents flow into whatever keys macros leave free, sorted by repo name (then
+session, workspace) so they do not shuffle when a status changes. If there are more
 agents than keys, the last key becomes a `+N more ›` tile that opens the next
 page: no agent is ever dropped from view, and pages do not reshuffle when a
-status changes. A deck left with fewer than three free keys after pins and
+status changes. A deck left with fewer than three free keys after
 macros cannot host back + forward + an agent, so it keeps a plain `+N` tile
 that reports the remainder instead of paginating.
 
 ### Macro keys
 
 Any key can instead be a **macro**: a fixed key that runs an action when
-pressed, rather than focusing an agent. Macros live on the same grid as pins
-and auto-flow agents, and, like pins, they are reserved — an agent never flows
-into a macro key and it is never evicted by overflow. `[[pins]]` and
-`[[macros]]` cannot share a key.
+pressed, rather than focusing an agent. Macros live on the same grid as
+agents and are reserved — an agent never flows into a macro key and it is never
+evicted by overflow.
 
 ```toml
 # A macro key: label is drawn on the tile, color is the accent bar (optional,
@@ -259,8 +231,7 @@ changes (an agent appears or disappears, changing what page 1 holds), which
 lands you back on the home page exactly when the deck's contents have visibly
 moved anyway. Status changes alone never move the page.
 
-Pinned agents and macros live on page 1 only; pages 2+ are auto-flow keys and
-the navigation tiles.
+Macros live on page 1 only; pages 2+ are agent keys and the navigation tiles.
 
 ## Watching agents (no hardware needed)
 
@@ -387,7 +358,7 @@ grep 'web viewer' ~/Library/Logs/sd-connect/sd-connect.log | tail -1
 
 This is the answer to "the deck is not plugged in right now". The daemon builds
 one frame and fans it out, so the viewer is showing the actual frame — including
-overflow and pinned-but-dark keys — rather than a second opinion about what the
+overflow keys — rather than a second opinion about what the
 deck might look like. With no deck attached, layout falls back to the MK.2's 15
 keys so there is still something to look at.
 
@@ -434,7 +405,7 @@ Run the [Setup](#setup) steps once on each.
 
 Nothing machine-specific is committed. The plist is generated at install time
 from `launchd/*.plist.template` with that machine's project and node paths, and
-`~/.config/sd-connect/config.toml` lives outside the repo, so pins can differ
+`~/.config/sd-connect/config.toml` lives outside the repo, so macros can differ
 per machine (home and work rarely have the same repos checked out).
 
 **No deck attached is fine.** The daemon starts, logs `no deck found; waiting
@@ -597,7 +568,7 @@ src/
   frame.ts          a rendered frame, and the Sink interface
   config.ts         ~/.config/sd-connect/config.toml, validated
   config.test.ts    config validation, notably [web]
-  layout.ts         pins, macros, auto-flow, overflow eviction
+  layout.ts         macros, repo-sorted auto-flow, paging
   macros.ts         run macro actions (command; url/app reserved)
   focus.ts          key press -> raise window + herdr agent.focus
   focus.test.ts     focus behaviour and its failure modes

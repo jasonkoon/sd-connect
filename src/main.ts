@@ -11,7 +11,7 @@
  * back to herdr except key presses, which only focus a window.
  *
  * A frame is built once and fanned out, so the web viewer is guaranteed to be
- * showing exactly what the deck is showing, including overflow and pinned keys.
+ * showing exactly what the deck is showing, including overflow keys.
  */
 
 import { isValidPort, loadConfig, MAX_PORT, MIN_PORT } from './config.ts'
@@ -77,11 +77,6 @@ async function main(): Promise<void> {
   const { config, warnings, path, existed } = await loadConfig()
   console.log(`[sd-connect] config: ${existed ? path : `${path} (not found, using defaults)`}`)
   for (const warning of warnings) console.warn(`[sd-connect] config: ${warning}`)
-  if (config.pins.length > 0) {
-    console.log(
-      `[sd-connect] ${config.pins.length} pin(s): ${config.pins.map((p) => `key ${p.key} -> ${p.session}:${p.cwd}`).join(', ')}`,
-    )
-  }
 
   const renderer = new TileRenderer(config.theme)
 
@@ -194,7 +189,6 @@ async function main(): Promise<void> {
     const keyCount = deckSink.keyCount ?? ampgd6Sink.keyCount ?? KEY_COUNT
     const { slots, pageCount } = layout(current, {
       keyCount,
-      pins: config.pins,
       macros: config.macros,
       page,
     })

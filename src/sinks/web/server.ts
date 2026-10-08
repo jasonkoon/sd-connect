@@ -68,7 +68,7 @@ interface FrameView {
 function labelFor(slot: Slot): string {
   switch (slot.kind) {
     case 'empty':
-      return slot.pinned ? 'reserved' : ''
+      return ''
     case 'macro':
       return `${slot.label} — macro`
     case 'overflow':

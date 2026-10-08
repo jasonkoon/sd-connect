@@ -12,7 +12,7 @@ import { KEY_COUNT } from '../../deck.ts'
 import type { Frame } from '../../frame.ts'
 import { runMacroAction } from '../../macros.ts'
 import { TileRenderer } from '../../render/tile.ts'
-import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../../types.ts'
+import { EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../../types.ts'
 import { WebSink } from './server.ts'
 
 const renderer = new TileRenderer()
@@ -140,14 +140,14 @@ describe('WebSink', () => {
     await s.present(
       frameOf([
         { kind: 'agent', agent: agent('portal') },
-        PINNED_EMPTY_SLOT,
+        EMPTY_SLOT,
         { kind: 'overflow', count: 3 },
         { kind: 'page', direction: 'back' },
       ]),
     )
     const view = await firstEvent(s.url)
     assert.equal(view.keys[0].pressable, true)
-    assert.equal(view.keys[1].pressable, false, 'pinned-empty is not pressable')
+    assert.equal(view.keys[1].pressable, false, 'empty is not pressable')
     assert.equal(view.keys[2].pressable, true, 'overflow opens the next page')
     assert.equal(view.keys[3].pressable, true, 'the back tile is pressable')
     assert.equal(view.keys[4].pressable, false, 'empty is not pressable')

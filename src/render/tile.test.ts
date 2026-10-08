@@ -2,7 +2,7 @@ import { describe, test } from 'node:test'
 import { expect } from '../expect.ts'
 import { createCanvas } from '@napi-rs/canvas'
 import { TILE_BYTES, ICON_SIZE } from '../deck.ts'
-import { EMPTY_SLOT, PINNED_EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
+import { EMPTY_SLOT, type Agent, type AgentStatus, type Slot } from '../types.ts'
 import { TileRenderer } from './tile.ts'
 import { fitText } from './text.ts'
 import { DEFAULT_THEME } from './theme.ts'
@@ -128,13 +128,6 @@ describe('TileRenderer', () => {
     const r = new TileRenderer(DEFAULT_THEME, 4)
     for (let i = 0; i < 20; i++) r.render(slot(agent(`repo${i}`)))
     expect(r.stats.size).toBeLessThanOrEqual(4)
-  })
-
-  test('pinned-empty is distinguishable from plain empty', () => {
-    const r = new TileRenderer()
-    const plain = r.render(EMPTY_SLOT)
-    const pinned = r.render(PINNED_EMPTY_SLOT)
-    expect(plain.equals(pinned)).toBe(false)
   })
 
   test('renders a full 15-key frame well under a display frame budget', () => {

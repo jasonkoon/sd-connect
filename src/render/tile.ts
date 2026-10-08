@@ -22,7 +22,7 @@ import { fitText } from './text.ts'
 export function slotKey(slot: Slot): string {
   switch (slot.kind) {
     case 'empty':
-      return slot.pinned ? 'pinned-empty' : 'empty'
+      return 'empty'
     case 'macro':
       // Macros are static per config, so the configured label + colour fully
       // identify the tile.
@@ -115,7 +115,7 @@ export class TileRenderer {
     ctx.clearRect(0, 0, ICON_SIZE, ICON_SIZE)
 
     if (slot.kind === 'empty') {
-      ctx.fillStyle = slot.pinned ? t.pinnedEmptyBackground : '#000000'
+      ctx.fillStyle = '#000000'
       ctx.fillRect(0, 0, ICON_SIZE, ICON_SIZE)
       return this.#toRgb()
     }

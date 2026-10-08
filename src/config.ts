@@ -11,7 +11,6 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { AGENT_STATUSES, type AgentStatus, type MacroAction, type MacroConfig } from './types.ts'
-import type { Pin } from './layout.ts'
 import { DEFAULT_THEME, type Theme } from './render/theme.ts'
 
 /** The localhost viewer, for when the deck is not plugged in. */
@@ -31,7 +30,6 @@ export interface Config {
    * off to keep presses purely inside herdr.
    */
   raiseWindow: boolean
-  pins: Pin[]
   macros: MacroConfig[]
   theme: Theme
 }
@@ -65,7 +63,6 @@ export const DEFAULT_CONFIG: Config = {
   pollIntervalMs: 400,
   raiseWindow: true,
   web: DEFAULT_WEB_CONFIG,
-  pins: [],
   macros: [],
   theme: DEFAULT_THEME,
 }
@@ -104,8 +101,7 @@ export function parseConfig(text: string): ParseResult {
   const config: Config = {
     ...DEFAULT_CONFIG,
     web: { ...DEFAULT_WEB_CONFIG },
-    pins: [],
-    macros: [],
+      macros: [],
     theme: { ...DEFAULT_THEME, statusColors: { ...DEFAULT_THEME.statusColors } },
   }
 
@@ -172,41 +168,6 @@ export function parseConfig(text: string): ParseResult {
         continue
       }
       config.theme.statusColors[name as AgentStatus] = value
-    }
-  }
-
-  if (raw.pins !== undefined) {
-    if (!Array.isArray(raw.pins)) {
-      warnings.push('pins must be an array of [[pins]] tables')
-    } else {
-      const usedKeys = new Set<number>()
-      raw.pins.forEach((entry, index) => {
-        const pin = asRecord(entry)
-        const label = `pins[${index}]`
-        if (!pin) {
-          warnings.push(`${label} is not a table`)
-          return
-        }
-        const { key, session, cwd } = pin
-        if (typeof key !== 'number' || !Number.isInteger(key) || key < 0) {
-          warnings.push(`${label}.key must be a non-negative integer, got ${JSON.stringify(key)}`)
-          return
-        }
-        if (typeof session !== 'string' || session === '') {
-          warnings.push(`${label}.session must be a non-empty string`)
-          return
-        }
-        if (typeof cwd !== 'string' || cwd === '') {
-          warnings.push(`${label}.cwd must be a non-empty string`)
-          return
-        }
-        if (usedKeys.has(key)) {
-          warnings.push(`${label}.key ${key} is already pinned; ignoring the duplicate`)
-          return
-        }
-        usedKeys.add(key)
-        config.pins.push({ key, session, cwd })
-      })
     }
   }
 

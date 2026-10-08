@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import { expect } from './expect.ts'
-import { layout, type Pin } from './layout.ts'
+import { layout } from './layout.ts'
 import { parseConfig } from './config.ts'
 import type { Agent, AgentStatus, Slot } from './types.ts'
 
@@ -148,115 +148,7 @@ describe('layout: pages', () => {
   })
 })
 
-describe('layout: pins', () => {
-  const pin = (key: number, session: string, cwd: string): Pin => ({ key, session, cwd })
-
-  test('places a pinned agent on its key', () => {
-    const agents = [agent('a', { cwd: '/dev/a' }), agent('b', { pane: 'w2:p1', cwd: '/dev/b' })]
-    const { slots } = layout(agents, { keyCount: 5, pins: [pin(3, 'zephyr', '/dev/b')] })
-    expect(shape(slots)).toEqual(['a', '.', '.', 'b', '.'])
-  })
-
-  test('holds the key dark when the pinned agent is absent', () => {
-    const { slots } = layout([agent('a')], { keyCount: 3, pins: [pin(1, 'zephyr', '/dev/gone')] })
-    expect(slots[1]).toEqual({ kind: 'empty', pinned: true })
-    // and the unpinned agent must not be placed there
-    expect(shape(slots)).toEqual(['a', '.', '.'])
-  })
-
-  test('matches on session as well as cwd', () => {
-    const agents = [
-      agent('same', { session: 'alpha', cwd: '/dev/same' }),
-      agent('same', { session: 'beta', cwd: '/dev/same', pane: 'w2:p1' }),
-    ]
-    const { slots } = layout(agents, { keyCount: 3, pins: [pin(0, 'beta', '/dev/same')] })
-    const first = slots[0] as { kind: 'agent'; agent: Agent }
-    expect(first.agent.session).toBe('beta')
-  })
-
-  test('a "*" session pin matches whatever session holds the repo', () => {
-    const agents = [agent('a', { session: 'whatever', cwd: '/dev/a' })]
-    const { slots } = layout(agents, { keyCount: 2, pins: [pin(0, '*', '/dev/a')] })
-    expect(shape(slots)).toEqual(['a', '.'])
-  })
-
-  test('a pin follows the agent when its cwd drifts into a subdirectory', () => {
-    // Restarted inside a subdir: the repo label is what stays stable.
-    const agents = [agent('a', { session: 'drifted', cwd: '/dev/a/sub/dir' })]
-    const { slots } = layout(agents, { keyCount: 2, pins: [pin(0, 'drifted', '/dev/a')] })
-    expect(shape(slots)).toEqual(['a', '.'])
-  })
-
-  test('ignores a trailing slash difference', () => {
-    const agents = [agent('a', { cwd: '/dev/a' })]
-    const { slots } = layout(agents, { keyCount: 2, pins: [pin(1, 'zephyr', '/dev/a/')] })
-    expect(shape(slots)).toEqual(['.', 'a'])
-  })
-
-  test('a pinned agent is not also shown in the auto region', () => {
-    const agents = [agent('a', { cwd: '/dev/a' })]
-    const { slots } = layout(agents, { keyCount: 3, pins: [pin(2, 'zephyr', '/dev/a')] })
-    expect(shape(slots)).toEqual(['.', '.', 'a'])
-  })
-
-  test('two panes sharing session and cwd: one pins, the other flows', () => {
-    const agents = [
-      agent('dup', { cwd: '/dev/dup', pane: 'w1:p1' }),
-      agent('dup', { cwd: '/dev/dup', pane: 'w1:p2' }),
-    ]
-    const { slots, pageCount } = layout(agents, { keyCount: 3, pins: [pin(2, 'zephyr', '/dev/dup')] })
-    expect(shape(slots)).toEqual(['dup', '.', 'dup'])
-    expect(pageCount).toBe(1)
-  })
-
-  test('out-of-range pins are ignored rather than fatal', () => {
-    const agents = [agent('a', { cwd: '/dev/a' })]
-    const { slots } = layout(agents, {
-      keyCount: 2,
-      pins: [pin(99, 'zephyr', '/dev/a'), pin(-1, 'zephyr', '/dev/a')],
-    })
-    expect(shape(slots)).toEqual(['a', '.'])
-  })
-
-  test('duplicate pins for one key: the first wins', () => {
-    const agents = [agent('a', { cwd: '/dev/a' }), agent('b', { cwd: '/dev/b', pane: 'w2:p1' })]
-    const { slots } = layout(agents, {
-      keyCount: 3,
-      pins: [pin(0, 'zephyr', '/dev/b'), pin(0, 'zephyr', '/dev/a')],
-    })
-    expect(shape(slots)[0]).toBe('b')
-  })
-
-  test('pins reduce the space available before overflow kicks in', () => {
-    const agents = [
-      agent('pinned', { cwd: '/dev/pinned', pane: 'w1:p1' }),
-      agent('x', { pane: 'w2:p1', status: 'idle' }),
-      agent('y', { pane: 'w3:p1', status: 'idle' }),
-      agent('z', { pane: 'w4:p1', status: 'idle' }),
-    ]
-    // 3 keys, one reserved by a pin -> 2 free -> 1 agent + overflow.
-    // Two free keys cannot host back + forward + an agent, so it does not
-    // paginate: the +1 tile honestly reports what is not shown.
-    const { slots, pageCount } = layout(agents, {
-      keyCount: 3,
-      pins: [pin(1, 'zephyr', '/dev/pinned')],
-    })
-    expect(shape(slots)).toEqual(['x', 'pinned', '+2'])
-    expect(pageCount).toBe(1)
-  })
-
-  test('every key pinned leaves nowhere for others to flow', () => {
-    const agents = [agent('a', { cwd: '/dev/a' }), agent('b', { cwd: '/dev/b', pane: 'w2:p1' })]
-    const { slots, pageCount } = layout(agents, { keyCount: 1, pins: [pin(0, 'zephyr', '/dev/a')] })
-    expect(shape(slots)).toEqual(['a'])
-    // 'b' has nowhere to go and there is no free key for an overflow tile.
-    expect(pageCount).toBe(1)
-  })
-})
-
 describe('layout: macros', () => {
-  const pin = (key: number, session: string, cwd: string): Pin => ({ key, session, cwd })
-
   test('places a macro on its key', () => {
     const agents = [agent('a'), agent('b', { pane: 'w2:p1' })]
     const { slots } = layout(agents, {
@@ -312,15 +204,12 @@ describe('layout: macros', () => {
     })
   })
 
-  test('macros take precedence over pins on the same key', () => {
+  test('agents flow around a macro key', () => {
     const agents = [agent('a', { cwd: '/dev/a' })]
     const { slots } = layout(agents, {
       keyCount: 3,
-      pins: [pin(0, 'zephyr', '/dev/a')],
       macros: [{ key: 0, label: 'M', action: { type: 'command', run: 'true' } }],
     })
-    expect(slots[0]?.kind).toBe('macro')
-    // the pinned agent must flow elsewhere instead
     expect(shape(slots)).toEqual(['mac', 'a', '.'])
   })
 
@@ -338,27 +227,20 @@ describe('config', () => {
     const { config, warnings } = parseConfig('')
     expect(warnings).toEqual([])
     expect(config.brightness).toBe(70)
-    expect(config.pins).toEqual([])
   })
 
-  test('reads brightness, interval, colours and pins', () => {
+  test('reads brightness, interval, colours', () => {
     const { config, warnings } = parseConfig(`
 brightness = 45
 poll_interval_ms = 250
 
 [colors]
 blocked = "#ff0000"
-
-[[pins]]
-key = 0
-session = "zephyr"
-cwd = "/dev/portal"
 `)
     expect(warnings).toEqual([])
     expect(config.brightness).toBe(45)
     expect(config.pollIntervalMs).toBe(250)
     expect(config.theme.statusColors.blocked).toBe('#ff0000')
-    expect(config.pins).toEqual([{ key: 0, session: 'zephyr', cwd: '/dev/portal' }])
   })
 
   test('a bad value is warned about and ignored, not fatal', () => {
@@ -382,21 +264,6 @@ sideways = "#001122"
     expect(warnings).toHaveLength(2)
     expect(warnings.join(' ')).toMatch(/#rrggbb/)
     expect(warnings.join(' ')).toMatch(/unknown status/)
-  })
-
-  test('skips an incomplete pin but keeps the valid ones', () => {
-    const { config, warnings } = parseConfig(`
-[[pins]]
-key = 0
-session = "zephyr"
-
-[[pins]]
-key = 1
-session = "zephyr"
-cwd = "/dev/ok"
-`)
-    expect(config.pins).toEqual([{ key: 1, session: 'zephyr', cwd: '/dev/ok' }])
-    expect(warnings[0]).toMatch(/cwd/)
   })
 
   test('does not mutate the shared default theme', () => {
