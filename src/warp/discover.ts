@@ -25,6 +25,7 @@ export interface ExternalProcessMatch {
 export interface DiscoveryOptions {
   sessionsBaseDir?: string
   claudeBaseDir?: string
+  warpDbPath?: string
   execCommand?: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
 }
 
@@ -36,6 +37,19 @@ export function defaultPiSessionsDir(): string {
 
 export function defaultClaudeDir(): string {
   return join(homedir(), '.claude')
+}
+
+export function defaultWarpDbPath(): string {
+  return join(
+    homedir(),
+    'Library',
+    'Group Containers',
+    '2BBY89MBSN.dev.warp',
+    'Library',
+    'Application Support',
+    'dev.warp.Warp-Stable',
+    'warp.sqlite',
+  )
 }
 
 export function sessionSafePath(cwd: string): string {
@@ -154,6 +168,148 @@ export function parseWarpFocusUrls(stdout: string): Map<number, string> {
     const urlMatch = line.match(/\bWARP_FOCUS_URL=(warp:\/\/\S+)/)
     if (urlMatch) result.set(Number(pidMatch[1]), urlMatch[1]!)
   }
+  return result
+}
+
+export interface WarpPaneRecord {
+  uuid: string
+  cwd: string
+  lastBlockMs: number | null
+}
+
+const WARP_PANES_SQL =
+  "SELECT lower(hex(tp.uuid)), COALESCE(tp.cwd, ''), COALESCE(MAX(COALESCE(b.completed_ts, b.start_ts)), '') " +
+  'FROM terminal_panes tp ' +
+  'LEFT JOIN blocks b ON b.pane_leaf_uuid = tp.uuid ' +
+  'GROUP BY tp.id;'
+
+function normalizePath(p: string): string {
+  return p.length > 1 ? p.replace(/\/+$/, '') : p
+}
+
+/**
+ * Parse `sqlite3 -separator $'\t'` output from `WARP_PANES_SQL`.
+ * Timestamps in Warp's sqlite DB are UTC strings (`YYYY-MM-DD HH:MM:SS.ffffff`).
+ */
+export function parseWarpSqlitePanes(stdout: string): WarpPaneRecord[] {
+  const panes: WarpPaneRecord[] = []
+  for (const line of stdout.split('\n')) {
+    if (!line.trim()) continue
+    const [rawUuid, rawCwd = '', rawTs = ''] = line.split('\t')
+    const uuid = rawUuid?.trim().toLowerCase() ?? ''
+    if (!/^[0-9a-f]{32}$/.test(uuid)) continue
+    let lastBlockMs: number | null = null
+    const ts = rawTs.trim()
+    if (ts) {
+      const parsed = Date.parse(`${ts.replace(' ', 'T')}Z`)
+      if (!Number.isNaN(parsed)) lastBlockMs = parsed
+    }
+    panes.push({
+      uuid,
+      cwd: normalizePath(rawCwd.trim()),
+      lastBlockMs,
+    })
+  }
+  return panes
+}
+
+/** Parse `ps -o pid=,lstart=` output into pid -> epoch ms. */
+export function parsePsStartTimes(stdout: string): Map<number, number> {
+  const result = new Map<number, number>()
+  for (const line of stdout.split('\n')) {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/)
+    if (!match) continue
+    const ms = Date.parse(match[2]!.trim())
+    if (!Number.isNaN(ms)) result.set(Number(match[1]), ms)
+  }
+  return result
+}
+
+/**
+ * Match Warp agent processes whose `WARP_FOCUS_URL` was not readable via
+ * `ps -Eww` (for example, `pi` sets `process.title = 'pi'`, which on macOS
+ * zeroes the KERN_PROCARGS2 argv/envp buffer) against open panes in Warp's
+ * sqlite database.
+ *
+ * Matches by `cwd`, breaking ties when multiple panes share a `cwd` by picking
+ * the pane whose most recent completed block precedes the process's start time
+ * by the smallest margin.
+ */
+export function matchWarpPanesToPids(
+  candidates: ReadonlyArray<{ pid: number; cwd: string; startMs: number | null }>,
+  panes: readonly WarpPaneRecord[],
+  claimedUuids: ReadonlySet<string> = new Set(),
+): Map<number, string> {
+  const result = new Map<number, string>()
+  const usedUuids = new Set<string>(claimedUuids)
+
+  const candidatesByCwd = new Map<string, Array<{ pid: number; cwd: string; startMs: number | null }>>()
+  for (const c of candidates) {
+    const cwd = normalizePath(c.cwd)
+    if (!cwd) continue
+    const list = candidatesByCwd.get(cwd) ?? []
+    list.push({ ...c, cwd })
+    candidatesByCwd.set(cwd, list)
+  }
+
+  const panesByCwd = new Map<string, WarpPaneRecord[]>()
+  for (const p of panes) {
+    if (!p.cwd || usedUuids.has(p.uuid)) continue
+    const list = panesByCwd.get(p.cwd) ?? []
+    list.push(p)
+    panesByCwd.set(p.cwd, list)
+  }
+
+  // `ps -o lstart=` has 1-second resolution; allow a small tolerance for clock
+  // and rounding skew between Warp's block timestamp and process start.
+  const SKEW_TOLERANCE_MS = 2000
+
+  for (const [cwd, groupCandidates] of candidatesByCwd) {
+    const groupPanes = (panesByCwd.get(cwd) ?? []).filter((p) => !usedUuids.has(p.uuid))
+    if (groupPanes.length === 0) continue
+
+    if (groupCandidates.length === 1 && groupPanes.length === 1) {
+      const pane = groupPanes[0]!
+      usedUuids.add(pane.uuid)
+      result.set(groupCandidates[0]!.pid, `warp://session/${pane.uuid}`)
+      continue
+    }
+
+    const pairs: Array<{ pid: number; uuid: string; delta: number }> = []
+    for (const c of groupCandidates) {
+      if (c.startMs === null) continue
+      for (const p of groupPanes) {
+        if (p.lastBlockMs === null) continue
+        if (p.lastBlockMs <= c.startMs + SKEW_TOLERANCE_MS) {
+          pairs.push({
+            pid: c.pid,
+            uuid: p.uuid,
+            delta: Math.abs(c.startMs - p.lastBlockMs),
+          })
+        }
+      }
+    }
+    pairs.sort((a, b) => a.delta - b.delta)
+
+    const matchedPids = new Set<number>()
+    for (const pair of pairs) {
+      if (matchedPids.has(pair.pid) || usedUuids.has(pair.uuid)) continue
+      matchedPids.add(pair.pid)
+      usedUuids.add(pair.uuid)
+      result.set(pair.pid, `warp://session/${pair.uuid}`)
+    }
+
+    // If exactly one candidate and one pane remain unmatched for this cwd
+    // (e.g. a brand-new tab with no prior blocks), pair them directly.
+    const remainingCandidates = groupCandidates.filter((c) => !matchedPids.has(c.pid))
+    const remainingPanes = groupPanes.filter((p) => !usedUuids.has(p.uuid))
+    if (remainingCandidates.length === 1 && remainingPanes.length === 1) {
+      const pane = remainingPanes[0]!
+      usedUuids.add(pane.uuid)
+      result.set(remainingCandidates[0]!.pid, `warp://session/${pane.uuid}`)
+    }
+  }
+
   return result
 }
 
@@ -310,11 +466,13 @@ export class WarpAgentScanner {
   #focusUrlCache = new Map<number, string | null>()
   #sessionsBaseDir: string
   #claudeBaseDir: string
+  #warpDbPath: string
   #exec: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
 
   constructor(options: DiscoveryOptions = {}) {
     this.#sessionsBaseDir = options.sessionsBaseDir ?? defaultPiSessionsDir()
     this.#claudeBaseDir = options.claudeBaseDir ?? defaultClaudeDir()
+    this.#warpDbPath = options.warpDbPath ?? defaultWarpDbPath()
     this.#exec = options.execCommand ?? execFileAsync
   }
 
@@ -340,27 +498,6 @@ export class WarpAgentScanner {
     }
     for (const pid of this.#focusUrlCache.keys()) {
       if (!activePids.has(pid)) this.#focusUrlCache.delete(pid)
-    }
-
-    const focusUrlPids = matches
-      .filter((m) => m.session === 'warp' && !this.#focusUrlCache.has(m.proc.pid))
-      .map((m) => m.proc.pid)
-    if (focusUrlPids.length > 0) {
-      let found = new Map<number, string>()
-      try {
-        const { stdout } = await this.#exec('ps', [
-          '-Eww',
-          '-o',
-          'pid=,command=',
-          '-p',
-          focusUrlPids.join(','),
-        ])
-        found = parseWarpFocusUrls(stdout)
-      } catch {
-      }
-      for (const pid of focusUrlPids) {
-        this.#focusUrlCache.set(pid, found.get(pid) ?? null)
-      }
     }
 
     for (const match of matches) {
@@ -390,6 +527,66 @@ export class WarpAgentScanner {
           this.#cwdCache.set(pid, cwd)
         }
       } catch {
+      }
+    }
+
+    const focusUrlPids = matches
+      .filter((m) => m.session === 'warp' && !this.#focusUrlCache.has(m.proc.pid))
+      .map((m) => m.proc.pid)
+    if (focusUrlPids.length > 0) {
+      let found = new Map<number, string>()
+      try {
+        const { stdout } = await this.#exec('ps', [
+          '-Eww',
+          '-o',
+          'pid=,command=',
+          '-p',
+          focusUrlPids.join(','),
+        ])
+        found = parseWarpFocusUrls(stdout)
+      } catch {
+      }
+
+      const unresolvedPids = focusUrlPids.filter((pid) => !found.has(pid))
+      if (unresolvedPids.length > 0) {
+        try {
+          const [sqliteRes, lstartRes] = await Promise.all([
+            this.#exec('sqlite3', [
+              '-readonly',
+              '-cmd',
+              '.timeout 500',
+              '-separator',
+              '\t',
+              this.#warpDbPath,
+              WARP_PANES_SQL,
+            ]),
+            this.#exec('ps', ['-o', 'pid=,lstart=', '-p', unresolvedPids.join(',')]),
+          ])
+          const panes = parseWarpSqlitePanes(sqliteRes.stdout)
+          const startTimes = parsePsStartTimes(lstartRes.stdout)
+          const claimedUuids = new Set<string>()
+          for (const url of [...this.#focusUrlCache.values(), ...found.values()]) {
+            const m = url?.match(/^warp:\/\/session\/([0-9a-f]{32})$/i)
+            if (m) claimedUuids.add(m[1]!.toLowerCase())
+          }
+          const matched = matchWarpPanesToPids(
+            unresolvedPids.map((pid) => ({
+              pid,
+              cwd: this.#cwdCache.get(pid) ?? '',
+              startMs: startTimes.get(pid) ?? null,
+            })),
+            panes,
+            claimedUuids,
+          )
+          for (const [pid, url] of matched) {
+            found.set(pid, url)
+          }
+        } catch {
+        }
+      }
+
+      for (const pid of focusUrlPids) {
+        this.#focusUrlCache.set(pid, found.get(pid) ?? null)
       }
     }
 
