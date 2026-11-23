@@ -9,11 +9,14 @@ import {
   findExternalAgentProcesses,
   findWarpPiProcesses,
   getClaudeSessionCwd,
+  matchWarpPanesToPids,
   parseClaudeSessionStatus,
   parseLsofCwdOutput,
   parsePiSessionStatus,
-  parseWarpFocusUrls,
   parsePsOutput,
+  parsePsStartTimes,
+  parseWarpFocusUrls,
+  parseWarpSqlitePanes,
   sessionSafePath,
   WarpAgentScanner,
   type RawProcess,
@@ -343,5 +346,122 @@ not a ps line
     const urls = parseWarpFocusUrls(out)
     expect(urls.get(5555)).toBe('warp://session/abc123')
     expect(urls.has(6666)).toBe(false)
+  })
+})
+
+describe('parseWarpSqlitePanes', () => {
+  test('parses tab-separated sqlite output with UTC timestamps', () => {
+    const out = [
+      'd3a0f1c5ae234e21b3f3528cc72ad5aa\t/Users/test/dev/sd-connect/\t2026-11-23 18:34:13.210186',
+      'c466e99b33ac49ab80709930684a0697\t/Users/test/dev/repo\t',
+      'not-a-uuid\t/Users/test/dev/ignored\t2026-11-23 18:34:13.000000',
+    ].join('\n')
+
+    const panes = parseWarpSqlitePanes(out)
+    expect(panes).toHaveLength(2)
+    expect(panes[0]).toEqual({
+      uuid: 'd3a0f1c5ae234e21b3f3528cc72ad5aa',
+      cwd: '/Users/test/dev/sd-connect',
+      lastBlockMs: Date.parse('2026-11-23T18:34:13.210186Z'),
+    })
+    expect(panes[1]).toEqual({
+      uuid: 'c466e99b33ac49ab80709930684a0697',
+      cwd: '/Users/test/dev/repo',
+      lastBlockMs: null,
+    })
+  })
+})
+
+describe('parsePsStartTimes', () => {
+  test('parses pid and lstart columns', () => {
+    const out = ` 3974 Mon Nov 23 11:34:27 2026
+93532 Mon Nov 23 11:21:12 2026
+`
+    const times = parsePsStartTimes(out)
+    expect(times.get(3974)).toBe(Date.parse('Mon Nov 23 11:34:27 2026'))
+    expect(times.get(93532)).toBe(Date.parse('Mon Nov 23 11:21:12 2026'))
+  })
+})
+
+describe('matchWarpPanesToPids', () => {
+  test('matches single pane per cwd even without block timestamps', () => {
+    const matched = matchWarpPanesToPids(
+      [{ pid: 3974, cwd: '/Users/test/dev/sd-connect', startMs: 1_000_000 }],
+      [{ uuid: 'd3a0f1c5ae234e21b3f3528cc72ad5aa', cwd: '/Users/test/dev/sd-connect', lastBlockMs: null }],
+    )
+    expect(matched.get(3974)).toBe('warp://session/d3a0f1c5ae234e21b3f3528cc72ad5aa')
+  })
+
+  test('disambiguates multiple panes sharing a cwd by closest preceding block timestamp', () => {
+    const matched = matchWarpPanesToPids(
+      [
+        { pid: 10, cwd: '/repo', startMs: Date.parse('2026-11-23T18:21:12Z') },
+        { pid: 20, cwd: '/repo', startMs: Date.parse('2026-11-23T18:17:30Z') },
+        { pid: 30, cwd: '/repo', startMs: Date.parse('2026-11-23T15:40:48Z') },
+      ],
+      [
+        { uuid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cwd: '/repo', lastBlockMs: Date.parse('2026-11-23T18:21:11Z') },
+        { uuid: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', cwd: '/repo', lastBlockMs: Date.parse('2026-11-23T18:17:29Z') },
+        { uuid: 'cccccccccccccccccccccccccccccccc', cwd: '/repo', lastBlockMs: Date.parse('2026-11-23T15:40:44Z') },
+      ],
+    )
+    expect(matched.get(10)).toBe('warp://session/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+    expect(matched.get(20)).toBe('warp://session/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+    expect(matched.get(30)).toBe('warp://session/cccccccccccccccccccccccccccccccc')
+  })
+
+  test('skips pane uuids already claimed via ps -Eww', () => {
+    const matched = matchWarpPanesToPids(
+      [{ pid: 10, cwd: '/repo', startMs: Date.parse('2026-11-23T18:21:12Z') }],
+      [
+        { uuid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cwd: '/repo', lastBlockMs: Date.parse('2026-11-23T18:21:11Z') },
+        { uuid: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', cwd: '/repo', lastBlockMs: Date.parse('2026-11-23T18:00:00Z') },
+      ],
+      new Set(['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']),
+    )
+    expect(matched.get(10)).toBe('warp://session/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+  })
+})
+
+describe('WarpAgentScanner sqlite fallback', () => {
+  test('falls back to warp.sqlite when ps -Eww omits WARP_FOCUS_URL', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sd-warp-sqlite-test-'))
+    const claudeDir = await mkdtemp(join(tmpdir(), 'sd-claude-sqlite-test-'))
+
+    const psOutput = `  PID  PPID TTY      COMM             ARGS
+  100     1 ??       stable           /Applications/Warp.app/Contents/MacOS/stable
+  101   100 ??       stable           /Applications/Warp.app/Contents/MacOS/stable terminal-server
+  102   101 ttys001  zsh              -zsh
+ 5555   102 ttys001  pi               pi
+`
+    const lsofOutput = `p5555
+fcwd
+n/Users/test/dev/sd-connect
+`
+    // Simulates macOS KERN_PROCARGS2 after `pi` sets process.title = 'pi'
+    const psEnvOutput = ` 5555 pi\n`
+    const lstartOutput = ` 5555 Mon Nov 23 11:34:27 2026\n`
+    const sqliteOutput = `d3a0f1c5ae234e21b3f3528cc72ad5aa\t/Users/test/dev/sd-connect\t2026-11-23 18:34:13.210186\n`
+
+    const mockExec = async (file: string, args: string[]) => {
+      if (file === 'ps' && args[0] === '-Eww') return { stdout: psEnvOutput, stderr: '' }
+      if (file === 'ps' && args[1] === 'pid=,lstart=') return { stdout: lstartOutput, stderr: '' }
+      if (file === 'ps') return { stdout: psOutput, stderr: '' }
+      if (file === 'lsof') return { stdout: lsofOutput, stderr: '' }
+      if (file === 'sqlite3') return { stdout: sqliteOutput, stderr: '' }
+      if (file === 'lsappinfo') return { stdout: '', stderr: '' }
+      return { stdout: '', stderr: '' }
+    }
+
+    const scanner = new WarpAgentScanner({
+      sessionsBaseDir: dir,
+      claudeBaseDir: claudeDir,
+      warpDbPath: '/tmp/fake-warp.sqlite',
+      execCommand: mockExec,
+    })
+
+    const agents = await scanner.scan()
+    expect(agents).toHaveLength(1)
+    expect(agents[0]?.focusUrl).toBe('warp://session/d3a0f1c5ae234e21b3f3528cc72ad5aa')
   })
 })
